@@ -308,8 +308,8 @@ def unpack_bundle_mw(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 				countBlock, _ = struct.unpack("%s2B" % endian, f.read(0x2))
 				count, _ = struct.unpack("%s2B" % endian, f.read(0x2))
 			else:
+				_, count = struct.unpack("%s2B" % endian, f.read(0x2))			#Edited: swapped lines
 				_, countBlock = struct.unpack("%s2B" % endian, f.read(0x2))
-				_, count = struct.unpack("%s2B" % endian, f.read(0x2))
 				mResourceId = bytes_to_id(f.read(0x4))
 			mauUncompressedSizeAndAlignment = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
 			mauSizeAndAlignmentOnDisk = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
@@ -377,7 +377,7 @@ def unpack_bundle_mw(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 						resource_path = os.path.join(resource_dir, mResourceId + "_model.dat")
 					else:
 						resource_path = os.path.join(resource_dir, mResourceId + "_unknown.dat")
-				elif j == 1 and muPlatform_little_endian == 0x2:
+				elif j == 1 and muPlatform_big_endian == 0x2:	# Edited
 					if muResourceType == "Raster" or muResourceType == "Texture":
 						resource_path = os.path.join(resource_dir, mResourceId + "_texture1.dat")
 					elif muResourceType == "Renderable":
@@ -1567,6 +1567,7 @@ def get_resourcetype_nibble_mw(resource_id):
 						0x00000060 : ['PolygonSoupList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000068 : ['NavigationMesh', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000070 : ['TextFile', [0x40000000, 0x0, 0x0, 0x0]],
+						0x00000074 : ['LuaData', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000080 : ['Ginsu', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000081 : ['Wave', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000082 : ['WaveContainerTable', [0x40000000, 0x0, 0x0, 0x0]],
@@ -1576,8 +1577,11 @@ def get_resourcetype_nibble_mw(resource_id):
 						0x00000090 : ['ZoneList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000091 : ['WorldPaintMap', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b0 : ['AnimationList', [0x40000000, 0x0, 0x0, 0x0]],
+						0x000000b1 : ['PathAnimation', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b2 : ['Skeleton', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b3 : ['Animation', [0x40000000, 0x0, 0x0, 0x0]],
+						0x000000C0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],
+						0x000000C1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x40000000]],
 						0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
@@ -1747,6 +1751,7 @@ def get_resourcetypeid_nibble_mw(resource_type):
 						'PolygonSoupList': [0x00000060, [0x40000000, 0x0, 0x0, 0x0]],
 						'NavigationMesh': [0x00000068, [0x40000000, 0x0, 0x0, 0x0]],
 						'TextFile': [0x00000070, [0x40000000, 0x0, 0x0, 0x0]],
+						'LuaData': [0x00000074, [0x40000000, 0x0, 0x0, 0x0]],
 						'Ginsu': [0x00000080, [0x40000000, 0x0, 0x0, 0x0]],
 						'Wave': [0x00000081, [0x40000000, 0x0, 0x0, 0x0]],
 						'WaveContainerTable': [0x00000082, [0x40000000, 0x0, 0x0, 0x0]],
@@ -1756,8 +1761,11 @@ def get_resourcetypeid_nibble_mw(resource_type):
 						'ZoneList': [0x00000090, [0x40000000, 0x0, 0x0, 0x0]],
 						'WorldPaintMap': [0x00000091, [0x40000000, 0x0, 0x0, 0x0]],
 						'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
+						'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
 						'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
 						'Animation': [0x000000b3, [0x40000000, 0x0, 0x0, 0x0]],
+						'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],
+						'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x40000000]],
 						'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
 						'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
 						'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
