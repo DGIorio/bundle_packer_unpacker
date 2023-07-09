@@ -1,7 +1,6 @@
 # Bundle Packer Unpacker
 Tool to unpack and pack Criterion Games' bundle files
 
-
 ## Usage
 Command-line usage: `python bundle_packer_unpacker.py [option] <game> <input_file> <output_dir> <output_name>`
 
@@ -16,3 +15,6 @@ Other input data:
  `<input_file>`     Input file or directory path  
  `<output_dir>`     Output directory  
 `<output_name>`     Output file name, only for -p and --pack option  
+
+## Tutorial
+- [Unpack and repack BNDL with Python script](https://docs.google.com/document/d/1rbCo7kI9R6x32whL0RI0YT-bmP64-sFcreRaA95BLok)
