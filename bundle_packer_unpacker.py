@@ -8,8 +8,8 @@ import math
 #import shutil
 
 
-version = "3.2.0"
-date = "2023-Jan-15"
+version = "3.2.1"
+date = "2023-Jul-10"
 
 
 def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_same_folder=False):
@@ -1811,11 +1811,11 @@ def id_to_bytes(id):
 	id = id.replace(' ', '')
 	id = id.replace('-', '')
 	if len(id) != 8:
-		print("ERROR: ResourceId not in the proper format: %s" % id_old)
+		print("Error: ResourceId not in the proper format: %s" % id_old)
 	try:
 		int(id, 16)
 	except ValueError:
-		print("ERROR: ResourceId is not a valid hexadecimal string: %s" % id_old)
+		print("Error: ResourceId is not a valid hexadecimal string: %s" % id_old)
 	return bytearray.fromhex(id)
 
 
@@ -1858,7 +1858,7 @@ def manual_command_handler(command):
 		output_dir = input("Output directory:\n").replace('"','')
 		
 		if os.path.isfile(output_dir):
-			print("Error: invalid argument. <output_dir> must be an directory")
+			print("Error: invalid argument. <output_dir> must be a directory")
 			return 1
 		
 		if os.path.isfile(input_arg):
@@ -1867,12 +1867,14 @@ def manual_command_handler(command):
 				status = unpack_bundle(input_arg, output_dir, "IDs_" + os.path.basename(input_arg))
 			elif game.lower() == "mw":
 				status = unpack_bundle_mw(input_arg, output_dir, "IDs_" + os.path.basename(input_arg))
-			print("Info: finished unpacking file")
+			if status == 0:
+				print("Info: finished unpacking file")
 		elif os.path.isdir(input_arg):
 			unpack_to_same_folder = bool(int(input("Output to the same directory (1 for yes, 0 for no):\n")))
 			print("")
 			status = unpack_multiple_bundles(input_arg, output_dir, game, unpack_to_same_folder)
-			print("Info: finished unpacking files")
+			if status == 0:
+				print("Info: finished unpacking files")
 	
 	elif command == "-p" or command == "--pack":
 		game = input("Target game:\n").strip()
@@ -1884,7 +1886,7 @@ def manual_command_handler(command):
 		print("")
 		
 		if os.path.isfile(output_dir):
-			print("Error: invalid argument. <output_dir> must be an directory")
+			print("Error: invalid argument. <output_dir> must be a directory")
 			return 1
 		
 		if os.path.isfile(input_arg):
@@ -1892,10 +1894,11 @@ def manual_command_handler(command):
 				status = pack_bundle(input_arg, output_dir, output_name)
 			elif game.lower() == "mw":
 				status = pack_bundle_mw(input_arg, output_dir, output_name)
-			print("Info: finished packing file")
+			if status == 0:
+				print("Info: finished packing file")
 		elif os.path.isdir(input_arg):
 			#status = pack_multiple_bundles(input_arg, output_dir, output_name)
-			print("Error: packing multiple bundles is not supporter yet")
+			print("Error: packing multiple bundles is not supported yet")
 			return 1
 	else:
 		print("Error: invalid argument. Please use the argument -h for help")
@@ -1954,32 +1957,35 @@ if __name__ == "__main__":
 		if len(sys.argv)-1 != 4:
 			print("Error: insuficient arguments. You must specify the source game (BP or MW), an input file and an output directory")
 		elif os.path.isfile(sys.argv[4]):
-			print("Error: invalid argument. <output_dir> must be an directory")
+			print("Error: invalid argument. <output_dir> must be a directory")
 		else:
 			if os.path.isfile(sys.argv[3]):
 				if sys.argv[2].lower() == "bp":
 					status = unpack_bundle(sys.argv[3], sys.argv[4], "IDs_" + os.path.basename(sys.argv[3]))
 				elif sys.argv[2].lower() == "mw":
 					status = unpack_bundle_mw(sys.argv[3], sys.argv[4], "IDs_" + os.path.basename(sys.argv[3]))
-				print("Info: finished unpacking file")
+				if status == 0:
+					print("Info: finished unpacking file")
 			elif os.path.isdir(sys.argv[3]):
 				status = unpack_multiple_bundles(sys.argv[3], sys.argv[2], sys.argv[4])
-				print("Info: finished unpacking files")
+				if status == 0:
+					print("Info: finished unpacking files")
 	
 	elif sys.argv[1] == "-p" or sys.argv[1] == "--pack":
 		if len(sys.argv)-1 != 5:
 			print("Error: insuficient arguments. You must specify a target game (BP or MW), an input file, an output directory and an output file name")
 		elif os.path.isfile(sys.argv[4]):
-			print("Error: invalid argument. <output_dir> must be an directory")
+			print("Error: invalid argument. <output_dir> must be a directory")
 		else:
 			if os.path.isfile(sys.argv[3]):
 				if sys.argv[2].lower() == "bp":
 					status = pack_bundle(sys.argv[3], sys.argv[4], sys.argv[5])
 				elif sys.argv[2].lower() == "mw":
 					status = pack_bundle_mw(sys.argv[3], sys.argv[4], sys.argv[5])
-				print("Info: finished packing file")
+				if status == 0:
+					print("Info: finished packing file")
 			elif os.path.isdir(sys.argv[3]):
 				#status = pack_multiple_bundles(sys.argv[3], sys.argv[4], sys.argv[5])
-				print("Error: packing multiple bundles is not supporter yet")
+				print("Error: packing multiple bundles is not supported yet")
 	else:
 		print("Error: invalid argument. Please use the argument -h for help")
