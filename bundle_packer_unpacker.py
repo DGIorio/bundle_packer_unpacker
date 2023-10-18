@@ -7,8 +7,8 @@ import tempfile
 import math
 
 
-version = "3.3.0"
-date = "2023-Oct-16"
+version = "3.3.1"
+date = "2023-Oct-17"
 
 
 def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_same_folder=False):
@@ -2972,7 +2972,7 @@ def manual_command_handler(command):
 		print("  -p, --pack      Pack an given resource table to the specified output directory and name it with the specified output name")
 		print()
 		print("Other input data:")
-		print("       <game>     The game the file is from/to: BP, HP or MW")
+		print("       <game>     The game the file is from/to: BP, HP, HPR or MW")
 		print(" <input_file>     Input file or directory path")
 		print(" <output_dir>     Output directory")
 		print("<output_name>     Output file name, only for -p and --pack option")
@@ -2984,7 +2984,7 @@ def manual_command_handler(command):
 	elif command == "-u" or command == "--unpack":
 		game = input("Source game (BP, HP, HPR, MW):\n").strip()
 		while game.lower() not in ["bp", "hp", "hpr", "mw"]:
-			game = input("Select one of the following games: BP, HP or MW:\n")
+			game = input("Select one of the following games: BP, HP, HPR or MW:\n")
 		input_arg = os.path.abspath(input("File or folder to unpack:\n").replace('"', ''))
 		output_dir = input("Output directory:\n").replace('"','')
 		
@@ -3081,7 +3081,7 @@ if __name__ == "__main__":
 		print("  -p, --pack      Pack an given resource table to the specified output directory and name it with the specified output name")
 		print()
 		print("Other input data:")
-		print("       <game>     The game the file is from/to: BP, HPR or MW")
+		print("       <game>     The game the file is from/to: BP, HP, HPR or MW")
 		print(" <input_file>     Input file or directory path")
 		print(" <output_dir>     Output directory")
 		print("<output_name>     Output file name, only for -p and --pack option")
