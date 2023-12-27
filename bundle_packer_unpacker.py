@@ -1030,6 +1030,9 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 			notes_data = f.read(muResourceEntriesOffset - f.tell())
 			debug_data = b''
 		
+		if (muFlags>>3)&1 == 0: # Cheking if debug data bit is equal 1
+			debug_data = b''
+		
 		mResources = []
 		for i in range(0, muResourceEntriesCount):
 			f.seek(muResourceEntriesOffset + i*0x50, 0)
@@ -1655,7 +1658,12 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 		f.write(bytearray([0])*padding)
 		f.write(resources_data_body)
 		f.write(bytearray([0])*padding2)
-		f.write(debug_data)
+		#f.write(debug_data)
+		
+		if (muFlags>>3)&1 == 1: # Cheking if debug data bit is equal 1
+			print("here")
+			f.write(debug_data)
+		
 		if muFlags not in (0x1, 0x7, 0x9, 0xF, 0x11, 0x19, 0x21, 0x27, 0x29, 0x2F, 0x41, 0x47):
 			# There is padding in this case
 			f.write(bytearray([0])*padding3)
@@ -2616,6 +2624,7 @@ def get_resourcetype_nibble_mw(resource_id):
 						0x0000020d : ['CameraTake', [0x40000000, 0x0, 0x0, 0x0]],
 						0x0000020e : ['CameraTakeList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x0000020f : ['GroundcoverCollection', [0x40000000, 0x0, 0x0, 0x0]],
+						0x00000210 : ['ControlMesh', [0x40000000, 0x0, 0x0, 0x0]],	#PS3 early betas
 						0x00000213 : ['LightInstanceList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000214 : ['GroundcoverInstances', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000215 : ['CompoundObject', [0x40000000, 0x0, 0x0, 0x0]],
