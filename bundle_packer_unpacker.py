@@ -7,8 +7,8 @@ import tempfile
 import math
 
 
-version = "3.3.1"
-date = "2023-Oct-17"
+version = "3.3.2"
+date = "2024-Jan-01"
 
 
 def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_same_folder=False):
