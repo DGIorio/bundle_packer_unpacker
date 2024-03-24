@@ -7,8 +7,8 @@ import tempfile
 import math
 
 
-version = "3.3.2"
-date = "2024-Jan-01"
+version = "3.4.1"
+date = "2024-Mar-24"
 
 
 def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_same_folder=False):
@@ -113,6 +113,11 @@ def unpack_bundle(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 			muPlatform = f.read(0x4)
 			muPlatform_little_endian = struct.unpack("<I", muPlatform)[0]
 			muPlatform_big_endian = struct.unpack(">I", muPlatform)[0]
+			
+			f.seek(0x64, 0)
+			muPlatform3 = f.read(0x4)
+			muPlatform3_little_endian = struct.unpack("<I", muPlatform3)[0]
+			muPlatform3_big_endian = struct.unpack(">I", muPlatform3)[0]
 			f.seek(0x4, 0)
 			
 			if muPlatform_little_endian == 0x1:
@@ -121,7 +126,8 @@ def unpack_bundle(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 			elif muPlatform_big_endian == 0x2:
 				print("Info: bundle platform is B5 X360.")
 				endian = ">"
-			elif muPlatform_big_endian == 0x3:
+			elif muPlatform3_big_endian == 0x3:
+				muPlatform_big_endian = muPlatform3_big_endian
 				print("Info: bundle platform is B5 PS3.")
 				endian = ">"
 			else:
@@ -1661,7 +1667,6 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 		#f.write(debug_data)
 		
 		if (muFlags>>3)&1 == 1: # Cheking if debug data bit is equal 1
-			print("here")
 			f.write(debug_data)
 		
 		if muFlags not in (0x1, 0x7, 0x9, 0xF, 0x11, 0x19, 0x21, 0x27, 0x29, 0x2F, 0x41, 0x47):
@@ -2191,17 +2196,28 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name):
 
 
 def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian=">"):
+	f.seek(0x64, 0)
+	muPlatform = struct.unpack("%sI" % endian, f.read(0x4))[0]
+	if muPlatform == 0x3:
+		num_allocated_resources = 6
+		entry_size = 0x84
+		compression_information = 0x30
+	else:
+		num_allocated_resources = 5
+		entry_size = 0x70
+		compression_information = 0x28
+	
 	f.seek(0x0, 0)
 	mauResourceDataOffset = []
 	mauResourceDataAlignment = []
 	macMagicNumber = str(f.read(0x4), 'ascii')
 	muVersion = struct.unpack("%sI" % endian, f.read(0x4))[0]
 	muResourceEntriesCount = struct.unpack("%sI" % endian, f.read(0x4))[0]
-	for i in range(0, 5):
+	for i in range(0, num_allocated_resources):
 		mauResourceDataOffset.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 		mauResourceDataAlignment.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 	
-	resources_memory_address = struct.unpack("%s5I" % endian, f.read(0x14))					#?
+	resources_memory_address = struct.unpack("%s%dI" % (endian, num_allocated_resources), f.read(0x4*num_allocated_resources))	#?
 	resource_ids_offset = struct.unpack("%sI" % endian, f.read(0x4))[0]						#?
 	muResourceEntriesOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
 	imports_offset = struct.unpack("%sI" % endian, f.read(0x4))[0]							#?
@@ -2218,6 +2234,8 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 	mauResourceDataOffset[2] = mauResourceDataOffset[1]
 	mauResourceDataOffset[1] = 0
 	mauResourceDataOffset[3] = 0
+	if muPlatform == 0x3:
+		mauResourceDataOffset[5] =  mauResourceDataOffset[2] #[1]
 	
 	# mResourceId
 	f.seek(resource_ids_offset, 0)
@@ -2236,7 +2254,7 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 		f.seek(compression_information_offset + i*0x28, 0)
 		mauUncompressedSize = []
 		mauUncompressedAlignment = []
-		for j in range(0, 5):
+		for j in range(0, num_allocated_resources):
 			mauUncompressedSize.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 			mauUncompressedAlignment.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 		mauUncompressedSizes.append(mauUncompressedSize)
@@ -2252,14 +2270,14 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 		mauAlignmentOnDisk = []
 		mauDiskOffset = []
 		mauAlignmentOnDiskOffset = []
-		f.seek(muResourceEntriesOffset + i*0x70, 0)
+		f.seek(muResourceEntriesOffset + i*entry_size, 0)
 		resource_data_memory_address = struct.unpack("%sI" % endian, f.read(0x4))[0]
 		muImportOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
 		muResourceTypeId = struct.unpack("%sI" % endian, f.read(0x4))[0]
-		for j in range(0, 5):
+		for j in range(0, num_allocated_resources):
 			mauSizeOnDisk.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 			mauAlignmentOnDisk.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
-		for j in range(0, 5):
+		for j in range(0, num_allocated_resources):
 			mauDiskOffset.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 			mauAlignmentOnDiskOffset.append(struct.unpack("%sI" % endian, f.read(0x4))[0])
 		resource_memory_address = struct.unpack("%s5I" % endian, f.read(0x14))
@@ -2276,11 +2294,12 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 		resource_dir = os.path.join(save_directory, muResourceType)
 		os.makedirs(resource_dir, exist_ok = True)
 		
-		for j in range(0, 5):
+		for j in range(0, num_allocated_resources):
 			#if mauUncompressedSizes[i][j] == 0:
 			if mauSizeOnDisk[j] == 0:
 				continue
 			f.seek(mauResourceDataOffset[j] + mauDiskOffset[j], 0)
+			#print(hex(f.tell()), hex(mauResourceDataOffset[j]), hex(mauDiskOffset[j]), hex(mauSizeOnDisk[j]))
 			resource_data = f.read(mauSizeOnDisk[j])
 			
 			if muFlags == 0x1:
@@ -2291,7 +2310,12 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 					except:
 						resource_data = zobj.decompress(resource_data)
 				else:
-					resource_data = zobj.decompress(resource_data)
+					try:
+						resource_data = zobj.decompress(resource_data)
+					except Exception as error_code:
+						print("ERROR: error while decompressing resource %s (%s). The error returned by zlib is:" % (maResourceId[i], muResourceType))
+						print(error_code)
+						pass
 			
 			resource_path = os.path.join(resource_dir, maResourceId[i] + ".dat")
 			
@@ -2300,7 +2324,7 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 					resource_path = os.path.join(resource_dir, maResourceId[i] + "_unknown.dat")
 				else:
 					resource_path = os.path.join(resource_dir, maResourceId[i] + "_unknown.dat")
-			elif j == 2:
+			elif j == 2 or (j == 5 and muPlatform == 0x3):
 				if muResourceType == "Raster":
 					resource_path = os.path.join(resource_dir, maResourceId[i] + "_texture.dat")
 				elif muResourceType == "Renderable":
