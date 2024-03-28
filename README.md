@@ -1,4 +1,6 @@
 # Bundle Packer Unpacker
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/DGIorio)
+
 Tool to unpack and pack Criterion Games' bundle files
 
 ## Usage
