@@ -7,8 +7,8 @@ import tempfile
 import math
 
 
-version = "3.4.1"
-date = "2024-Mar-24"
+version = "3.4.4"
+date = "2024-Apr-26"
 
 
 def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_same_folder=False):
@@ -195,7 +195,12 @@ def unpack_bundle(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 						except:
 							resource_data = zobj.decompress(resource_data)
 					else:
-						resource_data = zobj.decompress(resource_data)
+						try:
+							resource_data = zobj.decompress(resource_data)
+						except Exception as error_code:
+							print("ERROR: error while decompressing resource %s (%s). The error returned by zlib is:" % (maResourceId[i], muResourceType))
+							print(error_code)
+							pass
 				
 				resource_path = os.path.join(resource_dir, mResourceId + ".dat")
 				if j == 1 and (muPlatform_little_endian == 0x1 or muPlatform_big_endian == 0x2):
@@ -312,6 +317,7 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 		maResourceId = []
 		for i in range(0, muResourceEntriesCount):
 			f.seek(muResourceEntriesOffset + i*0x50, 0)
+			
 			if endian == "<":
 				mResourceId = bytes_to_id(f.read(0x4))
 				countBlock, _ = struct.unpack("%s2B" % endian, f.read(0x2))
@@ -380,7 +386,12 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 						except:
 							resource_data = zobj.decompress(resource_data)
 					else:
-						resource_data = zobj.decompress(resource_data)
+						try:
+							resource_data = zobj.decompress(resource_data)
+						except Exception as error_code:
+							print("ERROR: error while decompressing resource %s (%s). The error returned by zlib is:" % (maResourceId[i], muResourceType))
+							print(error_code)
+							pass
 				
 				resource_path = os.path.join(resource_dir, mResourceId + ".dat")
 				if j == 1:
@@ -552,7 +563,12 @@ def unpack_bundle_mw(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 						except:
 							resource_data = zobj.decompress(resource_data)
 					else:
-						resource_data = zobj.decompress(resource_data)
+						try:
+							resource_data = zobj.decompress(resource_data)
+						except Exception as error_code:
+							print("ERROR: error while decompressing resource %s (%s). The error returned by zlib is:" % (maResourceId[i], muResourceType))
+							print(error_code)
+							pass
 				
 				elif muPlatform_big_endian == 0x2 and (muFlags == 0x3 or muFlags == 0x7 or muFlags == 0xB or muFlags == 0x123):
 					zobj = zlib.decompressobj()
@@ -562,7 +578,12 @@ def unpack_bundle_mw(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 						except:
 							resource_data = zobj.decompress(resource_data)
 					else:
-						resource_data = zobj.decompress(resource_data)
+						try:
+							resource_data = zobj.decompress(resource_data)
+						except Exception as error_code:
+							print("ERROR: error while decompressing resource %s (%s). The error returned by zlib is:" % (maResourceId[i], muResourceType))
+							print(error_code)
+							pass
 				
 				elif muPlatform_big_endian == 0x3 and (muFlags == 0x1 or muFlags == 0x7 or muFlags == 0x11 or muFlags == 0x21 or muFlags == 0x27):
 					zobj = zlib.decompressobj()
@@ -572,7 +593,12 @@ def unpack_bundle_mw(bundle_path, save_directory, ids_table_name="IDs.BIN"):
 						except:
 							resource_data = zobj.decompress(resource_data)
 					else:
-						resource_data = zobj.decompress(resource_data)
+						try:
+							resource_data = zobj.decompress(resource_data)
+						except Exception as error_code:
+							print("ERROR: error while decompressing resource %s (%s). The error returned by zlib is:" % (maResourceId[i], muResourceType))
+							print(error_code)
+							pass
 				
 				resource_path = os.path.join(resource_dir, mResourceId + ".dat")
 				if j == 1 and (muPlatform_little_endian == 0x1 or muPlatform_big_endian == 0x3):
@@ -2512,6 +2538,8 @@ def get_resourcetype_nibble_hp(resource_id):
 						0x000000b0 : ['AnimationList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b1 : ['PathAnimation', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b2 : ['Skeleton', [0x40000000, 0x0, 0x0, 0x0]],
+						0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+						0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
 						0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
@@ -2568,6 +2596,8 @@ def get_resourcetype_nibble_hpr(resource_id):
 						0x000000b0 : ['AnimationList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b1 : ['PathAnimation', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000b2 : ['Skeleton', [0x40000000, 0x0, 0x0, 0x0]],
+						0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+						0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
 						0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
@@ -2809,6 +2839,8 @@ def get_resourcetypeid_nibble_hp(resource_type):
 						'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
 						'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
 						'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
+						'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+						'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
 						'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
 						'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
 						'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
@@ -2865,6 +2897,8 @@ def get_resourcetypeid_nibble_hpr(resource_type):
 						'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
 						'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
 						'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
+						'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+						'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
 						'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
 						'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
 						'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
@@ -3046,7 +3080,7 @@ def manual_command_handler(command):
 		game = input("Target game (BP, HP, HPR, MW):\n").strip()
 		while game.lower() not in ["bp", "hp", "hpr", "mw"]:
 			game = input("Select one of the following games: BP, HP, HPR or MW:\n")
-		input_arg = os.path.abspath(input("File or folder to pack:\n").replace('"', ''))
+		input_arg = os.path.abspath(input("File to pack:\n").replace('"', ''))
 		output_dir = input("Output directory:\n").replace('"','')
 		output_name = input("Output file name with extension:\n")
 		print("")
