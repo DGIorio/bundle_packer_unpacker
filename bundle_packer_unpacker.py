@@ -11,16 +11,17 @@ import json
 import re
 import xml.etree.ElementTree as ET
 
-version = "3.5.2"
-date = "2025-Jun-08"
+version = "3.6.0"
+date = "2026-Jan-11"
 
 
 def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_same_folder=False, split_by_stream=False):
 	debug_repack = False
 	
-	import shutil
-	wrong_ones = 0
-	right_ones = 0
+	if debug_repack == True:
+		import shutil
+		wrong_ones = 0
+		right_ones = 0
 	
 	for file in os.listdir(bundle_dir):
 		bundle_path = os.path.join(bundle_dir, file)
@@ -44,7 +45,8 @@ def unpack_multiple_bundles(bundle_dir, main_save_directory, game, unpack_to_sam
 			continue
 		
 		if debug_repack == True:
-			ids_path = os.path.join(save_directory, ids_table_name)
+			ids_path = os.path.join(save_directory, ids_table_name).replace(".BIN", ".json").replace(".BNDL", ".json")
+			
 			if os.path.isfile(ids_path):
 				#pack_bundle(ids_path, save_directory, "out" + file)
 				pack_bundle_hp(ids_path, save_directory, "out" + file, game.lower())
@@ -322,18 +324,25 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 		muResourceEntriesOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
 		mauResourceDataOffset = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
 		muFlags = struct.unpack("%sI" % endian, f.read(0x4))[0]
-		pad1 = struct.unpack("%sI" % endian, f.read(0x4))[0]
+		
+		macStreamName = []
+		flags = interpret_bundle_flags(muFlags, game)
+		platform = get_platform(muPlatform, "hp")
+		stream_names = []
 		
 		file_size = os.path.getsize(bundle_path)
 		if file_size < mauResourceDataOffset[-1]:
 			print("Error: bundle might not have resource data or its header is incorrect.")
 			return 1
 		
-		f.seek(0x30, 0)
-		if muDebugDataOffset < muResourceEntriesOffset:
-			notes_data = f.read(muDebugDataOffset - f.tell())
+		if muResourceEntriesOffset > 0x2C:
+			f.seek(0x2C, 0)
+			if muDebugDataOffset < muResourceEntriesOffset:
+				notes_data = f.read(muDebugDataOffset - f.tell())
+			else:
+				notes_data = f.read(muResourceEntriesOffset - f.tell())
 		else:
-			notes_data = f.read(muResourceEntriesOffset - f.tell())
+			notes_data = b''
 		
 		f.seek(muDebugDataOffset, 0)
 		if muDebugDataOffset < muResourceEntriesOffset:
@@ -344,24 +353,26 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 		resource_entries_data = f.read(mauResourceDataOffset[0] - f.tell())
 		
 		maResourceId = []
+		ResourceEntries = []
 		for i in range(0, muResourceEntriesCount):
 			f.seek(muResourceEntriesOffset + i*0x50, 0)
-			
 			if endian == "<":
 				mResourceId = bytes_to_id(f.read(0x4))
-				countBlock, _ = struct.unpack("%s2B" % endian, f.read(0x2))
-				count, _ = struct.unpack("%s2B" % endian, f.read(0x2))
+				ResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+				index = struct.unpack("B", f.read(0x1))[0]
+				IdType = struct.unpack("B", f.read(0x1))[0]
 				
 				muImportHash = bytes_to_id(f.read(0x4))
-				countBlock_imports, _ = struct.unpack("%s2B" % endian, f.read(0x2))
-				count_imports, _ = struct.unpack("%s2B" % endian, f.read(0x2))
+				ResourceTypeId_imports = struct.unpack(endian + "H", f.read(0x2))[0]
+				index_imports, IdType_imports = struct.unpack("%s2B" % endian, f.read(0x2))
 			else:
-				_, count = struct.unpack("%s2B" % endian, f.read(0x2))
-				_, countBlock = struct.unpack("%s2B" % endian, f.read(0x2))
+				IdType = struct.unpack("B", f.read(0x1))[0]
+				index = struct.unpack("B", f.read(0x1))[0]
+				ResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
 				mResourceId = bytes_to_id(f.read(0x4))
 				
-				_, count_imports = struct.unpack("%s2B" % endian, f.read(0x2))
-				_, countBlock_imports = struct.unpack("%s2B" % endian, f.read(0x2))
+				IdType_imports, index_imports = struct.unpack("%s2B" % endian, f.read(0x2))
+				ResourceTypeId_imports = struct.unpack(endian + "H", f.read(0x2))[0]
 				muImportHash = bytes_to_id(f.read(0x4))
 			mauUncompressedSizeAndAlignment = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
 			mauSizeAndAlignmentOnDisk = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
@@ -372,20 +383,25 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 			unused_muFlags = struct.unpack("%sB" % endian, f.read(0x1))[0]
 			muStreamIndex = struct.unpack("%sB" % endian, f.read(0x1))[0]
 			
+			ResourceId = id_to_int(mResourceId, endian)
 			if game.lower() == "hp":
-				muResourceType, nibbles = get_resourcetype_nibble_hp(muResourceTypeId)
+				muResourceType, nibbles = get_resourcetype_nibble_hp(muResourceTypeId, muPlatform)
 			elif game.lower() == "hpr":
 				muResourceType, nibbles = get_resourcetype_nibble_hpr(muResourceTypeId)
 			
-			if countBlock != 0:
-				mResourceId += "_" + str(countBlock) 
-				if count != 0:
-					mResourceId += "_" + str(count)
-			elif countBlock == 0 and count != 0:
-				mResourceId += "_" + str(countBlock)
-				mResourceId += "_" + str(count)
+			if ResourceTypeId != 0:
+				mResourceId += "_" + str(ResourceTypeId) 
+				if index != 0:
+					mResourceId += "_" + str(index)
+			elif ResourceTypeId == 0 and index != 0:
+				mResourceId += "_" + str(ResourceTypeId)
+				mResourceId += "_" + str(index)
 			
 			maResourceId.append(mResourceId)
+			ResourceEntries.append([ResourceId, ResourceTypeId, index, get_idtype(IdType), muResourceType, muStreamIndex])
+			
+			if muStreamIndex not in macStreamName:
+				macStreamName.append(muStreamIndex)
 			
 			resource_dir = os.path.join(save_directory, muResourceType)
 			os.makedirs(resource_dir, exist_ok = True)
@@ -423,13 +439,38 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 							pass
 				
 				resource_path = os.path.join(resource_dir, mResourceId + ".dat")
-				if j == 1:
+				if j == 1 and muPlatform_little_endian == 0x1:
 					if muResourceType == "Raster" or muResourceType == "Texture":
 						resource_path = os.path.join(resource_dir, mResourceId + "_texture.dat")
 					elif muResourceType == "Renderable":
 						resource_path = os.path.join(resource_dir, mResourceId + "_model.dat")
 					else:
 						resource_path = os.path.join(resource_dir, mResourceId + "_unknown.dat")
+				elif j == 1 and (muPlatform_big_endian == 0x2 or muPlatform_big_endian == 0x3):
+					if muResourceType == "Raster" or muResourceType == "Texture":
+						resource_path = os.path.join(resource_dir, mResourceId + "_texture.dat")
+					elif muResourceType == "Renderable":
+						resource_path = os.path.join(resource_dir, mResourceId + "_model.dat")
+						#resource_path = os.path.join(resource_dir, mResourceId + "_indices.dat")
+					else:
+						resource_path = os.path.join(resource_dir, mResourceId + "_unknown.dat")
+				elif j == 2 and muPlatform_little_endian == 0x1:
+					if muResourceType == "Raster" or muResourceType == "Texture":
+						resource_path = os.path.join(resource_dir, mResourceId + "_texture.dat")
+					elif muResourceType == "Renderable":
+						resource_path = os.path.join(resource_dir, mResourceId + "_model.dat")
+						#resource_path = os.path.join(resource_dir, mResourceId + "_vertices.dat")
+					else:
+						resource_path = os.path.join(resource_dir, mResourceId + "_unknown2.dat")
+				elif j == 2 and (muPlatform_big_endian == 0x2 or muPlatform_big_endian == 0x3):
+					if muResourceType == "Raster" or muResourceType == "Texture":
+						resource_path = os.path.join(resource_dir, mResourceId + "_texture.dat")
+					elif muResourceType == "Renderable":
+						resource_path = os.path.join(resource_dir, mResourceId + "_model.dat")
+					else:
+						resource_path = os.path.join(resource_dir, mResourceId + "_unknown2.dat")
+				elif j == 1:
+					resource_path = os.path.join(resource_dir, mResourceId + "_unknown.dat")
 				elif j == 2:
 					resource_path = os.path.join(resource_dir, mResourceId + "_unknown2.dat")
 				elif j == 3:
@@ -461,11 +502,39 @@ def unpack_bundle_hp(bundle_path, save_directory, game, ids_table_name="IDs.BIN"
 		f.write(struct.pack("%sI" % endian, muResourceEntriesOffset))
 		f.write(struct.pack("%s%dI" % (endian, numDataOffsets), *mauResourceDataOffset))
 		f.write(struct.pack("%sI" % endian, muFlags))
-		f.write(struct.pack("%sI" % endian, pad1))
+		#f.write(struct.pack("%sI" % endian, pad1))
 		f.write(notes_data)
 		f.write(debug_data)
 		f.seek(padding, 1)
 		f.write(resource_entries_data)
+	
+	# Output to json
+	header_name = os.path.splitext(os.path.basename(bundle_path))[0]
+	json_data = {
+				header_name: {
+					"Game": game.upper(),
+					"Platform": platform,
+					"Flags": flags,
+					"ResourceEntries": build_resources_json(ResourceEntries, macStreamName),
+					}
+				}
+	
+	# Debug
+	if "E_FLAGS_CONTAINS_DEBUG_DATA" in flags and len(debug_data) > 0:
+		try:
+			xml_root = ET.fromstring(debug_data.rstrip(b'\x00').decode("utf-8"))
+			debug_json = convert_resource_table(xml_root, macStreamName, False)
+		except Exception as e:
+			print(f"Error: error parsing XML: {e}")
+			debug_json = None
+		
+		if debug_json:
+			json_data[header_name].update(debug_json)
+	
+	json_name = ids_table_name.split(".")[0] + ".json"
+	output_path = os.path.join(save_directory, json_name)
+	with open(output_path, 'w', encoding='utf-8') as f:
+		json.dump(json_data, f, ensure_ascii=False, indent=4)
 	
 	return 0
 
@@ -523,7 +592,7 @@ def unpack_bundle_mw(bundle_path, save_directory, ids_table_name="IDs.BIN", spli
 		macStreamName = [struct.unpack(endian + '15s', f.read(0xF))[0].decode('utf-8').rstrip(chr(0)) for _ in range(4)]
 		
 		flags = interpret_bundle_flags(muFlags)
-		platform = get_platform(muPlatform)
+		platform = get_platform(muPlatform, "mw")
 		stream_names = [stream_name for stream_name in macStreamName if stream_name != '']
 		
 		if len(stream_names) == 0:
@@ -1092,205 +1161,545 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 	output_path = os.path.join(output_directory, output_name)
 	len_resource_entries_data = os.path.getsize(resource_entries_path)
 	
-	with open(resource_entries_path, "rb") as f:
-		try:
-			macMagicNumber = str(f.read(0x4), 'ascii')
-		except:
-			print("Error: not a valid bundle. Magic number (bnd2) is incorrect.")
-			return 1
-		if macMagicNumber != 'bnd2':
-			print("Error: not a valid bundle. Magic number (bnd2) is incorrect.")
-			return 1
+	ignore_not_found = False
+	ignore_duplicated_resources = False
+	check_for_missing_imports = False
+	
+	if ".json" in os.path.basename(resource_entries_path).lower():
+		with open(resource_entries_path, 'r') as f:
+			json_data = json.load(f)
 		
+		# Retrieving data
+		bundle_name, = json_data
+		try:
+			game = json_data[bundle_name]["Game"]
+		except:
+			game = "HPR"
+		
+		try:
+			platform = json_data[bundle_name]["Platform"]
+		except:
+			platform = "PC"
+		
+		try:
+			flags = json_data[bundle_name]["Flags"]
+		except:
+			flags = ["E_FLAGS_ZLIB_COMPRESSION", "E_FLAGS_MAIN_MEM_OPTIMISATION", "E_FLAGS_GRAPHICS_MEM_OPTIMISATION", "E_FLAGS_MULTISTREAM_BUNDLE"]
+		
+		try:
+			ResourceEntries = json_data[bundle_name]["ResourceEntries"]
+		except:
+			ResourceEntries = {}
+		
+		try:
+			debug_data = json_data[bundle_name]["ResourceStringTable"]
+		except:
+			debug_data = {}
+		
+		# Setting data
 		data_type = ["I", 0x4]
 		numDataOffsets = 4
+		macMagicNumber = 'bnd2'
+		muVersion = 0x3
+		muPlatform = set_platform(platform, "hp")
+		muDebugDataOffset = 0xFFFFFFFF
+		muResourceEntriesCount = -1
+		muResourceEntriesOffset = 0x30
+		mauResourceDataOffset = [-1, -1, -1, -1]
+		muFlags = construct_bundle_flags(flags, game)
+		macStreamName = list(ResourceEntries.keys())
+		pad1 = 0
+		custom_data = b''
+		main_resource_type = ""
 		
-		muVersion = struct.unpack("<%s" % data_type[0], f.read(data_type[1]))[0]
-		muPlatform = struct.unpack("<%s" % data_type[0], f.read(data_type[1]))[0]
-		
-		if muPlatform != 0x1:
-			print("Error: bundle platform not supported yet. Select a PC file version.")
+		if muPlatform == 0x1:
+			print("Info: bundle platform is PC, PS4 or Switch.")
+			endian = "<"
+		elif muPlatform == 0x2:
+			print("Info: bundle platform is X360.")
+			endian = ">"
+		elif muPlatform == 0x3:
+			print("Info: bundle platform is PS3.")
+			endian = ">"
+		#elif muPlatform == 0x4:
+		#	print("Info: bundle platform is PS Vita.")
+		#	endian = "<"
+		#elif muPlatform == 0x5:
+		#	print("Info: bundle platform is Wii U.")
+		#	endian = ">"
+		else:
+			print("Error: bundle platform not supported yet. Select a PC, PS3 or X360 file version.")
 			return 1
 		
-		muDebugDataOffset = struct.unpack("<I", f.read(0x4))[0]
-		muResourceEntriesCount = struct.unpack("<I", f.read(0x4))[0]
-		muResourceEntriesOffset = struct.unpack("<I", f.read(0x4))[0]
-		mauResourceDataOffset = struct.unpack("<%dI" % numDataOffsets, f.read(numDataOffsets*0x4))
-		muFlags = struct.unpack("<I", f.read(0x4))[0]
-		pad1 = struct.unpack("<I", f.read(0x4))[0]
+		if len(macStreamName) > 4:
+			print("Error: only four Streams are allowed. Input file contains %d, which are " % (len(macStreamName), macStreamName))
+			return 1
 		
-		muResourceEntriesCount_verification = (len_resource_entries_data - muResourceEntriesOffset)//0x50
-		if muResourceEntriesCount != muResourceEntriesCount_verification:
-			print("Warning: muResourceEntriesCount does not match the number of resource entries. It will be used %d" % muResourceEntriesCount_verification)
-			muResourceEntriesCount = muResourceEntriesCount_verification
+		stream_names = []
+		split_by_stream = False
 		
-		#debug_data = f.read(muResourceEntriesOffset - f.tell())
-		if muDebugDataOffset < muResourceEntriesOffset:
-			#Moving debug data to the end of the file
-			notes_data = f.read(muDebugDataOffset - f.tell())
-			
-			f.seek(muDebugDataOffset, 0)
-			debug_data = f.read(muResourceEntriesOffset - muDebugDataOffset)
-			len_resource_entries_data = len_resource_entries_data - len(debug_data)
-			
-			# Removing padding on the end
-			k = 0
-			for l in range(len(debug_data), 0, -1):
-				if debug_data[l-1] != 0:
-					break
-				k += 1
-			k -= 1
-			if k > 0:
-				debug_data = debug_data[:-k]
-			
-		else:
-			notes_data = f.read(muResourceEntriesOffset - f.tell())
-			debug_data = b''
+		if "E_FLAGS_CONTAINS_DEBUG_DATA" in flags and len(debug_data) > 0:
+			debug_data = json_to_xml(debug_data, macStreamName, False)
 		
-		if (muFlags>>3)&1 == 0: # Cheking if debug data bit is equal 1
-			debug_data = b''
+		# Regular expression pattern (both "type=" and "index=" are optional, case-insensitive)
+		#pattern = r"ID=(\d+)(?:, TYPE=(\d+))?(?:, INDEX=(\d+))?" # int
+		pattern = r"ID=(0x[0-9A-Fa-f]+)(?:, type=(\d+))?(?:, index=(\d+))?" #hex
 		
 		mResources = []
-		for i in range(0, muResourceEntriesCount):
-			f.seek(muResourceEntriesOffset + i*0x50, 0)
-			mResourceId = bytes_to_id(f.read(0x4))
-			countBlock, null = struct.unpack("<2B", f.read(0x2))	# null always equal to zero
-			count, isIdInteger = struct.unpack("<2B", f.read(0x2))	# isIdInteger seems to be related with CRC32 ids or unique IDs; always zero or one
-			f.seek(0x3C, 1)
-			muResourceTypeId = struct.unpack("<I", f.read(0x4))[0]
-			f.seek(0x2, 1)
-			unused_muFlags = struct.unpack("<B", f.read(0x1))[0]
-			muStreamIndex = struct.unpack("<B", f.read(0x1))[0]
-			
-			if game.lower() == "hp":
-				muResourceType, nibbles = get_resourcetype_nibble_hp(muResourceTypeId)
-			elif game.lower() == "hpr":
-				muResourceType, nibbles = get_resourcetype_nibble_hpr(muResourceTypeId)
-			
-			mResourceId_ = mResourceId
-			if countBlock != 0:
-				mResourceId += "_" + str(countBlock) 
-				if count != 0:
-					mResourceId += "_" + str(count)
-			elif countBlock == 0 and count != 0:
-				mResourceId += "_" + str(countBlock)
-				mResourceId += "_" + str(count)
-			
-			resource_dir = os.path.join(directory_path, muResourceType)
-			resource_path = os.path.join(resource_dir, mResourceId + ".dat")
-			if not os.path.isfile(resource_path):
-				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + ".dat")
-				if not os.path.isfile(resource_path_alternative):
-					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + ".dat")
-					if not os.path.isfile(resource_path_alternative):
-						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + ".dat")
+		for muStreamIndex, mcStreamName in enumerate(macStreamName):
+			stream_entries = ResourceEntries[mcStreamName]
+			for entry, data in stream_entries.items():
+				match = re.match(pattern, entry, re.IGNORECASE)  # Add re.IGNORECASE to make it case-insensitive
+				
+				if match:
+					ResourceId = int(match.group(1), 16) # Convert hex string to int
+					ResourceTypeId = int(match.group(2)) if match.group(2) else 0  # Default to 0 if missing
+					index = int(match.group(3)) if match.group(3) else 0  # Default to 0 if missing
+				else:
+					print("Error: incorrect entry %s." % entry)
+					return 1
+				
+				try:
+					muResourceType = data["ResourceType"]
+				except:
+					print("Error: missing resource type on entry %s." % to_hex(ResourceId))
+					return 1
+				
+				try:
+					IdType = data["IdType"]
+				except:
+					print("Warning: missing IdType on entry %s. Setting as 'E_ID_TYPE_NORMAL'" % to_hex(ResourceId))
+					IdType = "E_ID_TYPE_NORMAL"
+				
+				mResourceId = int_to_id(ResourceId, endian)
+				IdType = set_idtype(IdType)
+				
+				if muResourceType == "GraphicsSpec":
+					main_resource_type = "VEH"
+				elif muResourceType == "InstanceList":
+					main_resource_type = "TRK"
+				elif muResourceType == "CharacterSpec":
+					main_resource_type = "CHR"
+				
+				if ignore_not_found == True:
+					file_name = mResourceId
+					if ResourceTypeId != 0:
+						file_name += "_" + str(ResourceTypeId) 
+						if index != 0:
+							file_name += "_" + str(index)
+					elif ResourceTypeId == 0 and index != 0:
+						file_name += "_" + str(ResourceTypeId)
+						file_name += "_" + str(index)
+					
+					resource_dir = os.path.join(directory_path, muResourceType)
+					if split_by_stream == True:
+						try:
+							_ = stream_names[muStreamIndex]
+							#resource_dir = os.path.join(directory_path, muResourceType, stream_names[muStreamIndex])
+							resource_dir = os.path.join(directory_path, stream_names[muStreamIndex], muResourceType)
+						except:
+							print("Error: StreamName for  StreamIndex %s not found. Skipping resource %s." % (muStreamIndex, file_name))
+							continue
+					
+					resource_path = os.path.join(resource_dir, file_name + ".dat")
+					if not os.path.isfile(resource_path):
+						resource_path_alternative = os.path.join(resource_dir, file_name.replace("_", "-") + ".dat")
 						if not os.path.isfile(resource_path_alternative):
-							print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + ".dat", resource_path))
-							return 1
-				resource_path = resource_path_alternative
-			
-			resource_path_body = ""
-			if muResourceType == "Raster" or muResourceType == "Texture":
-				resource_path_body = os.path.join(resource_dir, mResourceId + "_texture.dat")
-				if not os.path.isfile(resource_path_body):
-					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_texture.dat")
-					if not os.path.isfile(resource_path_alternative):
-						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_texture.dat")
-						if not os.path.isfile(resource_path_alternative):
-							resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_texture.dat")
+							resource_path_alternative = os.path.join(resource_dir, file_name.replace("_", " ") + ".dat")
 							if not os.path.isfile(resource_path_alternative):
-								print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + "_texture.dat", resource_path_body))
-								return 1
-					resource_path_body = resource_path_alternative
-			
-			elif muResourceType == "Renderable":
-				resource_path_body = os.path.join(resource_dir, mResourceId + "_model.dat")
-				if not os.path.isfile(resource_path_body):
-					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_model.dat")
-					if not os.path.isfile(resource_path_alternative):
-						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_model.dat")
-						if not os.path.isfile(resource_path_alternative):
-							resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_model.dat")
-							if not os.path.isfile(resource_path_alternative):
-								print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + "_model.dat", resource_path_body))
-								return 1
-					resource_path_body = resource_path_alternative
-			
-			elif muResourceType == "ShaderProgramBuffer":
-				resource_path_body = os.path.join(resource_dir, mResourceId + "_unknown.dat")
-				if not os.path.isfile(resource_path_body):
-					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_unknown.dat")
-					if not os.path.isfile(resource_path_alternative):
-						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_unknown.dat")
-						if not os.path.isfile(resource_path_alternative):
-							resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_unknown.dat")
-							if not os.path.isfile(resource_path_alternative):
-								print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + "_unknown.dat", resource_path_body))
-								return 1
-					resource_path_body = resource_path_alternative
-			
-			mResourceId = mResourceId_
-			mResources.append([mResourceId, muResourceType, nibbles, resource_path, resource_path_body, countBlock, count, isIdInteger, muStreamIndex])
+								resource_path_alternative = os.path.join(resource_dir, file_name.replace("_", "") + ".dat")
+								if not os.path.isfile(resource_path_alternative):
+									continue	# if the user wants to remove IDs from the resource table that don't have files
+				
+				if ignore_duplicated_resources == True:
+					if [mResourceId, muResourceType, [], "", "", "", "", ResourceTypeId, index, IdType, muStreamIndex] in mResources:
+						# File is already in the resouces table
+						continue
+				
+				mResources.append([mResourceId, muResourceType, [], "", "", "", "", ResourceTypeId, index, IdType, muStreamIndex])
 		
-		if muDebugDataOffset < muResourceEntriesOffset:
-			#Moving debug data to the end of the file
-			muResourceEntriesOffset = muDebugDataOffset
-			muDebugDataOffset = 0xFFFFFFFF
+		if len(macStreamName) < 4:
+			while len(macStreamName) < 4:
+				macStreamName.append("")
+		
+		muResourceEntriesCount = len(mResources)
+		
+	else:
+		with open(resource_entries_path, "rb") as f:
+			try:
+				macMagicNumber = str(f.read(0x4), 'ascii')
+			except:
+				print("Error: not a valid bundle. Magic number (bnd2) is incorrect.")
+				return 1
+			if macMagicNumber != 'bnd2':
+				print("Error: not a valid bundle. Magic number (bnd2) is incorrect.")
+				return 1
+			
+			data_type = ["I", 0x4]
+			numDataOffsets = 4
+			main_resource_type = ""
+			
+			f.seek(0x8, 0)
+			muPlatform = f.read(0x4)
+			muPlatform_little_endian = struct.unpack("<I", muPlatform)[0]
+			muPlatform_big_endian = struct.unpack(">I", muPlatform)[0]
+			f.seek(0x4, 0)
+			
+			if muPlatform_little_endian == 0x1:
+				print("Info: bundle platform is PC, PS4 or Switch.")
+				endian = "<"
+			elif muPlatform_big_endian == 0x2:
+				print("Info: bundle platform is X360.")
+				endian = ">"
+			elif muPlatform_big_endian == 0x3:
+				print("Info: bundle platform is PS3.")
+				endian = ">"
+			else:
+				print("Error: bundle platform not supported yet. Select a PC, PS3, PS4 or X360 file version.")
+				return 1
+			
+			muVersion = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			muPlatform = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			muDebugDataOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			muResourceEntriesCount = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			muResourceEntriesOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			mauResourceDataOffset = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
+			muFlags = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			
+			pad1 = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			
+			muResourceEntriesCount_verification = (len_resource_entries_data - muResourceEntriesOffset)//0x50
+			if muResourceEntriesCount != muResourceEntriesCount_verification:
+				print("Warning: muResourceEntriesCount does not match the number of resource entries. It will be used %d" % muResourceEntriesCount_verification)
+				muResourceEntriesCount = muResourceEntriesCount_verification
+			
+			#debug_data = f.read(muResourceEntriesOffset - f.tell())
+			if muDebugDataOffset < muResourceEntriesOffset:
+				#Moving debug data to the end of the file
+				custom_data = f.read(muDebugDataOffset - f.tell())
+				
+				f.seek(muDebugDataOffset, 0)
+				debug_data = f.read(muResourceEntriesOffset - muDebugDataOffset)
+				len_resource_entries_data = len_resource_entries_data - len(debug_data)
+				
+				# Removing padding on the end
+				k = 0
+				for l in range(len(debug_data), 0, -1):
+					if debug_data[l-1] != 0:
+						break
+					k += 1
+				k -= 1
+				if k > 0:
+					debug_data = debug_data[:-k]
+				
+			else:
+				custom_data = f.read(muResourceEntriesOffset - f.tell())
+				debug_data = b''
+			
+			if (muFlags>>3)&1 == 0: # Cheking if debug data bit is equal 1
+				debug_data = b''
+			
+			stream_names = []
+			split_by_stream = False
+			
+			mResources = []
+			for i in range(0, muResourceEntriesCount):
+				f.seek(muResourceEntriesOffset + i*0x50, 0)
+				if endian == "<":
+					mResourceId = bytes_to_id(f.read(0x4))
+					ResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+					index = struct.unpack("B", f.read(0x1))[0]
+					IdType = struct.unpack("B", f.read(0x1))[0]
+				else:
+					IdType = struct.unpack("B", f.read(0x1))[0]
+					index = struct.unpack("B", f.read(0x1))[0]
+					ResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+					mResourceId = bytes_to_id(f.read(0x4))
+				f.seek(0x3C, 1)
+				muResourceTypeId = struct.unpack("%sI" % endian, f.read(0x4))[0]
+				muImportCount = struct.unpack("%sH" % endian, f.read(0x2))[0]
+				unused_muFlags = struct.unpack("%sB" % endian, f.read(0x1))[0]
+				muStreamIndex = struct.unpack("%sB" % endian, f.read(0x1))[0]
+				
+				if game.lower() == "hp":
+					muResourceType, nibbles = get_resourcetype_nibble_hp(muResourceTypeId, muPlatform)
+				elif game.lower() == "hpr":
+					muResourceType, nibbles = get_resourcetype_nibble_hpr(muResourceTypeId)
+				
+				if muResourceType == "GraphicsSpec":
+					main_resource_type = "VEH"
+				elif muResourceType == "InstanceList":
+					main_resource_type = "TRK"
+				elif muResourceType == "CharacterSpec":
+					main_resource_type = "CHR"
+				
+				if ignore_not_found == True:
+					file_name = mResourceId
+					if ResourceTypeId != 0:
+						file_name += "_" + str(ResourceTypeId) 
+						if index != 0:
+							file_name += "_" + str(index)
+					elif ResourceTypeId == 0 and index != 0:
+						file_name += "_" + str(ResourceTypeId)
+						file_name += "_" + str(index)
+					
+					resource_dir = os.path.join(directory_path, muResourceType)
+					if split_by_stream == True:
+						try:
+							_ = stream_names[muStreamIndex]
+							#resource_dir = os.path.join(directory_path, muResourceType, stream_names[muStreamIndex])
+							resource_dir = os.path.join(directory_path, stream_names[muStreamIndex], muResourceType)
+						except:
+							print("Error: StreamName for StreamIndex %s not found. Skipping resource %s." % (muStreamIndex, file_name))
+							continue
+					
+					resource_path = os.path.join(resource_dir, file_name + ".dat")
+					if not os.path.isfile(resource_path):
+						resource_path_alternative = os.path.join(resource_dir, file_name.replace("_", "-") + ".dat")
+						if not os.path.isfile(resource_path_alternative):
+							resource_path_alternative = os.path.join(resource_dir, file_name.replace("_", " ") + ".dat")
+							if not os.path.isfile(resource_path_alternative):
+								resource_path_alternative = os.path.join(resource_dir, file_name.replace("_", "") + ".dat")
+								if not os.path.isfile(resource_path_alternative):
+									continue	# if the user wants to remove IDs from the resource table that don't have files
+				
+				if ignore_duplicated_resources == True:
+					if [mResourceId, muResourceType, nibbles, "", "", "", "", ResourceTypeId, index, IdType, muStreamIndex] in mResources:
+						# File is already in the resouces table
+						continue
+				
+				mResources.append([mResourceId, muResourceType, nibbles, "", "", "", "", ResourceTypeId, index, IdType, muStreamIndex])
+	
+	if check_for_missing_imports == True:
+		shared_resources_dir = r"C:\Users\USERNAME\AppData\Roaming\Blender Foundation\Blender\3.6\scripts\addons\NeedForSpeedHotPursuit\NFSHP_Library_PC"
+		shared_resources = []
+		
+		if main_resource_type == "VEH":
+			for shared_file in os.listdir(shared_resources_dir):
+				shared_file_path = os.path.join(shared_resources_dir, shared_file)
+				if not os.path.isfile(shared_file_path):
+					continue
+				
+				if any(k in shared_file.upper() for k in ("SHADERS", "COMPETITORSOUNDS", "CUSTOMISATIONDATA", "RUMBLELIST", "TRAFFICATTRIBS", "TRAFFICSOUNDS", "VEHICLETEX", "WAVES", "GLOBALEFFECTS", "GLOBALMATERIALDICTIONARY", "GLOBALTEXTUREDICTIONARY")):
+					shared_resources.extend(read_resources_table_mw(shared_file_path))
+		
+		elif main_resource_type == "TRK":
+			for shared_file in os.listdir(shared_resources_dir):
+				shared_file_path = os.path.join(shared_resources_dir, shared_file)
+				if not os.path.isfile(shared_file_path):
+					continue
+				
+				if any(k in shared_file.upper() for k in ("SHADERS", "AMBIENCES", "ARENA", "DISTRICT", "ENVIRONMENT", "GLOBALRESOURCES", "SHAREDWAVES", "SURFACELIST", "SURFACESOUNDS", "GLOBALEFFECTS", "GLOBALMATERIALDICTIONARY", "GLOBALTEXTUREDICTIONARY")):
+					shared_resources.extend(read_resources_table_mw(shared_file_path))
+		
+		elif main_resource_type == "CHR":
+			for shared_file in os.listdir(shared_resources_dir):
+				shared_file_path = os.path.join(shared_resources_dir, shared_file)
+				if not os.path.isfile(shared_file_path):
+					continue
+				
+				if any(k in shared_file.upper() for k in ("SHADERS", "GLOBALEFFECTS", "GLOBALMATERIALDICTIONARY", "GLOBALTEXTUREDICTIONARY")):
+					shared_resources.extend(read_resources_table_mw(shared_file_path))
+		
+		# Removing some resource types from the list because they usually are included in the files
+		shared_resources[:] = [shared_resource for shared_resource in shared_resources
+								if shared_resource[1] not in ("GenesysType", "GenesysObject", "GenesysDefinition", "GenesysInstance")]
+	
+	for i, mResource in enumerate(mResources):
+		(
+			mResourceId,
+			muResourceType,
+			nibbles,
+			_,
+			_,
+			_,
+			_,
+			ResourceTypeId,
+			index,
+			IdType,
+			muStreamIndex,
+		) = mResource
+			
+		mResourceId_ = mResourceId
+		if ResourceTypeId != 0:
+			mResourceId += "_" + str(ResourceTypeId) 
+			if index != 0:
+				mResourceId += "_" + str(index)
+		elif ResourceTypeId == 0 and index != 0:
+			mResourceId += "_" + str(ResourceTypeId)
+			mResourceId += "_" + str(index)
+		
+		resource_dir = os.path.join(directory_path, muResourceType)
+		if split_by_stream == True:
+			try:
+				_ = stream_names[muStreamIndex]
+				resource_dir = os.path.join(directory_path, stream_names[muStreamIndex], muResourceType)
+			except:
+				print("ERROR: StreamName for StreamIndex %s not found. muStreamIndex %s of mResourceId %s is not valid." % (muStreamIndex, muStreamIndex, mResourceId))
+				return 1
+		
+		resource_path = os.path.join(resource_dir, mResourceId + ".dat")
+		if not os.path.isfile(resource_path):
+			resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + ".dat")
+			if not os.path.isfile(resource_path_alternative):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + ".dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + ".dat")
+					if not os.path.isfile(resource_path_alternative):
+						print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + ".dat", resource_path))
+						return 1
+			resource_path = resource_path_alternative
+		
+		resource_path_body = ""
+		resource_path_body2 = ""
+		resource_path_body3 = ""
+		if muResourceType == "Raster" or muResourceType == "Texture":
+			resource_path_body = os.path.join(resource_dir, mResourceId + "_texture.dat")
+			if not os.path.isfile(resource_path_body):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_texture.dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_texture.dat")
+					if not os.path.isfile(resource_path_alternative):
+						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_texture.dat")
+						if not os.path.isfile(resource_path_alternative):
+							print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + "_texture.dat", resource_path_body))
+							return 1
+				resource_path_body = resource_path_alternative
+			
+			if muPlatform == 0x3:
+				resource_path_body2 = resource_path_body
+				resource_path_body = ""
+		
+		elif muResourceType == "Renderable":
+			resource_path_body = os.path.join(resource_dir, mResourceId + "_model.dat")
+			if not os.path.isfile(resource_path_body):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_model.dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_model.dat")
+					if not os.path.isfile(resource_path_alternative):
+						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_model.dat")
+						if not os.path.isfile(resource_path_alternative):
+							print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + "_model.dat", resource_path_body))
+							return 1
+				resource_path_body = resource_path_alternative
+			
+			if muPlatform == 0x3:
+				resource_path_body2 = resource_path_body
+				resource_path_body = ""
+		
+		elif muResourceType == "ShaderProgramBuffer":
+			resource_path_body = os.path.join(resource_dir, mResourceId + "_unknown.dat")
+			if not os.path.isfile(resource_path_body):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_unknown.dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_unknown.dat")
+					if not os.path.isfile(resource_path_alternative):
+						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_unknown.dat")
+						if not os.path.isfile(resource_path_alternative):
+							print("Error: failed to get %s %s: no such file in '%s'." % (muResourceType.lower(), mResourceId + "_unknown.dat", resource_path_body))
+							return 1
+				resource_path_body = resource_path_alternative
+		
+		if not os.path.isfile(resource_path_body):
+			resource_path_alternative = os.path.join(resource_dir, mResourceId + "_unknown.dat")
+			if not os.path.isfile(resource_path_alternative):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_unknown.dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_unknown.dat")
+					if not os.path.isfile(resource_path_alternative):
+						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_unknown.dat")
+						if not os.path.isfile(resource_path_alternative):
+							resource_path_alternative = ""
+			if os.path.isfile(resource_path_alternative):
+				resource_path_body = resource_path_alternative
+		
+		if not os.path.isfile(resource_path_body2):
+			resource_path_alternative = os.path.join(resource_dir, mResourceId + "_unknown2.dat")
+			if not os.path.isfile(resource_path_alternative):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_unknown2.dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_unknown2.dat")
+					if not os.path.isfile(resource_path_alternative):
+						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_unknown2.dat")
+						if not os.path.isfile(resource_path_alternative):
+							resource_path_alternative = ""
+			if os.path.isfile(resource_path_alternative):
+				resource_path_body2 = resource_path_alternative
+		
+		if not os.path.isfile(resource_path_body3):
+			resource_path_alternative = os.path.join(resource_dir, mResourceId + "_unknown3.dat")
+			if not os.path.isfile(resource_path_alternative):
+				resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "-") + "_unknown3.dat")
+				if not os.path.isfile(resource_path_alternative):
+					resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", " ") + "_unknown3.dat")
+					if not os.path.isfile(resource_path_alternative):
+						resource_path_alternative = os.path.join(resource_dir, mResourceId.replace("_", "") + "_unknown3.dat")
+						if not os.path.isfile(resource_path_alternative):
+							resource_path_alternative = ""
+			if os.path.isfile(resource_path_alternative):
+				resource_path_body3 = resource_path_alternative
+		
+		mResources[i][3] = resource_path
+		mResources[i][4] = resource_path_body
+		mResources[i][5] = resource_path_body2
+		mResources[i][6] = resource_path_body3
+		
+	if muDebugDataOffset < muResourceEntriesOffset:
+		#Moving debug data to the end of the file
+		muResourceEntriesOffset = muDebugDataOffset
+		muDebugDataOffset = 0xFFFFFFFF
 	
 	resources_data = b''
 	resources_data_body = b''
 	resources_data2 = b''
 	
+	appended_data = [b'', b'', b'', b'']
 	mauUncompressedSizes = []
 	mauSizesOnDisk = []
 	mauDiskOffsets = []
 	
 	for mResource in mResources:
-		mResourceId, muResourceType, nibbles, resource_path, resource_path_body, countBlock, count, isIdInteger, muStreamIndex = mResource
+		mResourceId, muResourceType, nibbles, resource_path, resource_path_body, resource_path_body2, resource_path_body3, ResourceTypeId, index, IdType, muStreamIndex = mResource
 		
-		resource0_data = resource1_data = resource2_data = resource3_data = b''
-		disk0_data = disk1_data = disk2_data = disk3_data = b''
-		
-		with open(resource_path, "rb") as f:
-			resource0_data = f.read()
-		if muFlags % 2 != 0:
-			disk0_data = zlib.compress(resource0_data, 9)
-		else:
-			disk0_data = resource0_data
-		padding = calculate_padding(len(disk0_data), 0x10)
-		#padding = 0
-		
-		if resource_path_body != "":
-			with open(resource_path_body, "rb") as f:
-				resource1_data = f.read()
+		resource_paths = [resource_path, resource_path_body, resource_path_body2, resource_path_body3]
+		disk_offsets = [0, 0, 0, 0]
+		uncompressed_sizes = [0, 0, 0, 0]
+		sizes_on_disk = [0, 0, 0, 0]
+		for i in range (0, 4):
+			if resource_paths[i] == "":
+				continue
+			
+			with open(resource_paths[i], "rb") as f:
+				resource_i_data = f.read()
 			if muFlags % 2 != 0:
-				disk1_data = zlib.compress(resource1_data, 9)
+				disk_i_data = zlib.compress(resource_i_data, 9)
 			else:
-				disk1_data = resource1_data
-			padding_disk1 = calculate_padding(len(disk1_data), 0x80)
-			#padding_disk1 = 0
+				disk_i_data = resource_i_data
 			
-			mResource.append([len(resources_data), len(resources_data_body), 0, 0])
+			if i > 0:
+				padding = calculate_padding(len(disk_i_data), 0x80)
+			else:
+				padding = calculate_padding(len(disk_i_data), 0x10)
 			
-			resources_data_body += disk1_data
-			resources_data_body += bytearray([0])*padding_disk1
-		else:
-			mResource.append([len(resources_data), 0, 0, 0])
+			disk_offsets[i] = len(appended_data[i])
+			uncompressed_sizes[i] = len(resource_i_data)
+			sizes_on_disk[i] = len(disk_i_data)
+			appended_data[i] += disk_i_data
+			appended_data[i] += bytearray([0])*padding
 		
-		resources_data += disk0_data
-		resources_data += bytearray([0])*padding
-		
-		mResource.append([len(resource0_data), len(resource1_data), len(resource2_data), len(resource3_data)])
-		mResource.append([len(disk0_data), len(disk1_data), len(disk2_data), len(disk3_data)])
-		
+		mResource.append(disk_offsets)
+		mResource.append(uncompressed_sizes)
+		mResource.append(sizes_on_disk)
+		resources_data, resources_data_body, resources_data2, resources_data3 = appended_data
 		
 		# ImportCount and Offset
 		muImportCount = 0
 		muImportOffset = 0
 		muImportHash = 0
 		muImportHash2 = 0
+		muImportFilenames = []
 		
-		if muResourceType in ('CameraTakeList', 'Renderable', 'Material', 'Model', 'BearEffect', 'VertexProgramState', 'Shader', 'CharacterSpec',
+		if muResourceType in ('CameraTakeList', 'Renderable', 'Material', 'Model', 'BearEffect', 'VertexProgramState', 'CgsVertexProgramState', 'Shader', 'CharacterSpec',
 							  'GroundcoverCollection', 'WorldObject', 'TrafficData', 'DynamicInstanceList', 'ZoneHeader', 'InstanceList', 'LightInstanceList',
 							  'ReverbRoadData', 'Font', 'VehicleSound', 'GraphicsSpec', 'AnimationList', 'GenesysInstance', 'Cutscene', 'RoadData'): 
 			
@@ -1300,13 +1709,13 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						muImportCount = 0
 						muImportOffset = 0
 					else:
-						mpaInstances = struct.unpack("<I", f.read(0x4))[0]
+						mpaInstances = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						f.seek(os.path.getsize(resource_path) - 0x8, 0)
-						check = struct.unpack("<I", f.read(0x4))[0]
+						check = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						count = 1
 						while check != mpaInstances:
 							f.seek(-0x14, 1)
-							check = struct.unpack("<I", f.read(0x4))[0]
+							check = struct.unpack("%sI" % endian, f.read(0x4))[0]
 							count = count + 1
 						muImportCount = count
 						muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
@@ -1316,22 +1725,22 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						f.seek(0x10, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x1C, 0)
-					muImportCount = struct.unpack("<B", f.read(0x1))[0]
+					muImportCount = struct.unpack("%sH" % endian, f.read(0x2))[0]
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 				
 				elif muResourceType == 'GraphicsSpec':
 					f.seek(-0x8, 2)
-					last_resource_pointer = struct.unpack("<I", f.read(0x4))[0]
+					last_resource_pointer = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					mpResourceIds = last_resource_pointer + 0x4
 					mpResourceIds += calculate_padding(mpResourceIds, 0x10)
 					
 					f.seek(0x0, 0)
-					mppModels = struct.unpack("<I", f.read(0x4))[0]
+					mppModels = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					if game.lower() == "hp":
 						f.seek(0x10, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x20, 0)
-					muPartsCount = struct.unpack("<B", f.read(0x1))[0]
+					muPartsCount = struct.unpack("%sH" % endian, f.read(0x2))[0]
 					if mppModels >= last_resource_pointer:
 						if game.lower() == "hp":
 							mpResourceIds = mppModels + 4*muPartsCount
@@ -1344,36 +1753,42 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == 'Model':
 					f.seek(0x0, 0)
-					pointer = struct.unpack("<i", f.read(0x4))[0]
+					pointer = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
-					check = struct.unpack("<i", f.read(0x4))[0]
+					check = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					count = 1
 					while check != pointer:
 						f.seek(-0x14, 1)
-						check = struct.unpack("<i", f.read(0x4))[0]
+						check = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						count = count + 1
 					muImportCount = count
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 					
 				elif muResourceType == 'Renderable':
 					f.seek(0x12, 0)
-					num_meshes = struct.unpack("<H", f.read(0x2))[0]
+					num_meshes = struct.unpack("%sH" % endian, f.read(0x2))[0]
 					if game.lower() == "hpr":
 						f.seek(0x4, 1)
-					meshes_table_pointer = struct.unpack("<i", f.read(0x4))[0]
+					meshes_table_pointer = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					f.seek(meshes_table_pointer, 0)
-					intPosition1 = struct.unpack("<i", f.read(0x4))[0]
-					if game.lower() == "hp":
+					intPosition1 = struct.unpack("%sI" % endian, f.read(0x4))[0]
+					if game.lower() == "hp" and endian == "<":
 						MaterialPointer = intPosition1 + 0x28
 						mesh_data_size = 0x70
 					elif game.lower() == "hpr":
 						MaterialPointer = intPosition1 + 0x20
 						mesh_data_size = 0xA0
+					elif muPlatform == 0x2:
+						MaterialPointer = intPosition1 + 0x20
+						mesh_data_size = 0x90
+					elif muPlatform == 0x3:
+						MaterialPointer = intPosition1 + 0x1C
+						mesh_data_size = 0x70
 					
 					f.seek(intPosition1 + num_meshes*mesh_data_size, 0)
 					for j in range(0, os.path.getsize(resource_path) - (intPosition1 + num_meshes*mesh_data_size)):
 						f.seek(0x8, 1)
-						MatPointer = struct.unpack("<i", f.read(0x4))[0]
+						MatPointer = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						if MatPointer == MaterialPointer:
 							muImportOffset = f.tell() - 0xC
 							muImportCount = int((os.path.getsize(resource_path) - muImportOffset)/0x10)
@@ -1382,14 +1797,19 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == 'Material':
 					f.seek(0x6, 0)
-					muImportOffset = struct.unpack("<H", f.read(0x2))[0]
+					muImportOffset = struct.unpack("%sH" % endian, f.read(0x2))[0]
 					muImportCount = int((os.path.getsize(resource_path) - muImportOffset)/0x10)
 				
 				elif muResourceType == 'GenesysObject': # No files in HPR (PC)
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
 					check = f.read(0x4)
 					count = 1
-					while check != b'\x00\x00\x00\x80':
+					if endian == "<":
+						pointer = b'\x00\x00\x00\x80'
+					elif endian == ">":
+						pointer = b'\x80\x00\x00\x00'
+					
+					while check != pointer:
 						f.seek(-0x14, 1)
 						check = f.read(0x4)
 						count = count + 1
@@ -1398,37 +1818,43 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == "GenesysType": # No files in HPR (PC)
 					f.seek(0x0, 0)
-					unkbyte0 = struct.unpack("<B", f.read(0x1))[0]
-					unkbyte1 = struct.unpack("<B", f.read(0x1))[0]
-					unkbyte2 = struct.unpack("<B", f.read(0x1))[0]
-					if unkbyte1 == 0x6:
-						pointer = b'\x24\x00\x00\x00'
+					muGenesysVersion = struct.unpack("B", f.read(0x1))[0]
+					meNativeType = struct.unpack("B", f.read(0x1))[0]
+					muPropertyCount = struct.unpack("%sH" % endian, f.read(0x2))[0]
+					if meNativeType == 0x6:
+						pointer = 0x24
 					else:
-						pointer = b'\x04\x00\x00\x00'
-					if unkbyte2 > 0:
+						pointer = 0x4
+					if muPropertyCount > 0:
 						f.seek(0x20, 0)
-						unkint = struct.unpack("<i", f.read(0x4))[0]
+						mpTypeInfo = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						f.seek(0x8, 0)
-						unkint2 = struct.unpack("<i", f.read(0x4))[0]
-						if unkint > 0 or unkint2 != 0:
+						muBaseTypeVersion = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						if mpTypeInfo > 0 or muBaseTypeVersion != 0:
 							f.seek(os.path.getsize(resource_path) - 0x8, 0)
-							check = f.read(0x4)
+							muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+							check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 							count = 1
 							while check != pointer:
 								f.seek(-0x14, 1)
-								check = f.read(0x4)
+								muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+								check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 								count = count + 1
-								if f.tell() < unkint:
+								if f.tell() < mpTypeInfo:
 									break
-							if f.tell() > unkint:
+							if f.tell() > mpTypeInfo:
 								muImportCount = count
 								muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 				
 				elif muResourceType == 'VehicleSound':
-					if game.lower() == "hp":
+					if game.lower() == "hp" and endian == "<":
 						pointer = b'\x08\x00\x00\x80'
-					elif game.lower() == "hpr":
+					elif game.lower() == "hp" and endian == ">":
+						pointer = b'\x80\x00\x00\x08'
+					elif game.lower() == "hpr" and endian == "<":
 						pointer = b'\x10\x00\x00\x80'
+					elif game.lower() == "hpr" and endian == ">":
+						pointer = b'\x80\x00\x00\x10'
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
 					check = f.read(0x4)
 					count = 1
@@ -1441,7 +1867,7 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == "PropInstanceList": # No files in HPR (PC)
 					f.seek(0x8, 0)
-					muImportCount = struct.unpack("<i", f.read(0x4))[0]
+					muImportCount = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					if muImportCount == 0:
 						muImportOffset = 0
 					else:
@@ -1449,11 +1875,13 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == "PropObject": # No files in HPR (PC)
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
-					check = f.read(0x4)
+					muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+					check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 					count = 1
-					while check != b'\x04\x00\x00\x00':
+					while check != 0x4:
 						f.seek(-0x14, 1)
-						check = f.read(0x4)
+						muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 						count = count + 1
 					muImportCount = count
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
@@ -1462,7 +1890,13 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
 					check = f.read(0x4)
 					count = 1
-					while check != b'\x08\x00\x00\x00':
+					
+					if endian == "<":
+						pointer = b'\x08\x00\x00\x00'
+					elif endian == ">":
+						pointer = b'\x00\x00\x00\x08'
+					
+					while check != pointer:
 						f.seek(-0x14, 1)
 						check = f.read(0x4)
 						count = count + 1
@@ -1474,24 +1908,30 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						f.seek(0x3C, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x50, 0)
-					int_offset = struct.unpack("<i", f.read(0x4))[0]
+					int_offset = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					int_offset += calculate_padding(int_offset, 0x10)
 					if int_offset < os.path.getsize(resource_path) and int_offset > 0:
 						if game.lower() == "hp":
 							f.seek(0x30, 0)
 						elif game.lower() == "hpr":
 							f.seek(0x40, 0)
-						pointer = struct.unpack("<i", f.read(0x4))[0]
+						pointer = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						f.seek(int_offset + 0x8, 0)
-						check = struct.unpack("<H", f.read(0x2))[0]
+						muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 						while check != pointer:
-							f.seek(0xE, 1)
-							check = struct.unpack("<H", f.read(0x2))[0]
-						muImportOffset = f.tell() - 0xA
+							f.seek(0xC, 1)
+							muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+							check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
+						muImportOffset = f.tell() - 0xC
 						muImportCount = int((os.path.getsize(resource_path) - muImportOffset)/0x10)
 				
 				elif muResourceType == "ReverbRoadData":
-					f.seek(os.path.getsize(resource_path) - 0x5, 0)
+					f.seek(os.path.getsize(resource_path), 0)
+					if endian == "<":
+						f.seek(-0x5, 1)
+					elif endian == ">":
+						f.seek(-0x8, 1)
 					check = f.read(0x1)
 					count = 0
 					while check == b'\x80':
@@ -1506,14 +1946,14 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 					muImportCount_b = 0
 					if game.lower() == "hp":
 						f.seek(0x14, 0)
-						muImportCount_a = struct.unpack("<i", f.read(0x4))[0]
+						muImportCount_a = struct.unpack("%sH" % endian, f.read(0x2))[0]
 						f.seek(0x1C, 0)
-						muImportCount_b = struct.unpack("<i", f.read(0x4))[0]
+						muImportCount_b = struct.unpack("%sH" % endian, f.read(0x2))[0]
 					elif game.lower() == "hpr":
 						f.seek(0x20, 0)
-						muImportCount_a = struct.unpack("<i", f.read(0x4))[0]
+						muImportCount_a = struct.unpack("%sI" % endian, f.read(0x4))[0]
 						f.seek(0x30, 0)
-						muImportCount_b = struct.unpack("<i", f.read(0x4))[0]
+						muImportCount_b = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					muImportCount = muImportCount_a + muImportCount_b
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 				
@@ -1522,7 +1962,7 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						f.seek(0xC, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x10, 0)
-					muImportCount = struct.unpack("<i", f.read(0x4))[0]
+					muImportCount = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 				
 				elif muResourceType == "DynamicInstanceList":
@@ -1530,7 +1970,7 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						f.seek(0x8, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x10, 0)
-					muImportCount = struct.unpack("<i", f.read(0x4))[0]
+					muImportCount = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					if muImportCount == 0:
 						muImportOffset = 0
 					else:
@@ -1538,26 +1978,30 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == "ZoneHeader":
 					if game.lower() == "hp":
-						pointer = b'\x04\x00\x00\x80'
+						pointer = 0x4
 					elif game.lower() == "hpr":
-						pointer = b'\x08\x00\x00\x80'
+						pointer = 0x8
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
-					check = f.read(0x4)
+					muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+					check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 					count = 1
 					while check != pointer:
 						f.seek(-0x14, 1)
-						check = f.read(0x4)
+						muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 						count = count + 1
 					muImportCount = count
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 				
 				elif muResourceType == "CompoundObject": # No files in HPR (PC)
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
-					check = f.read(0x4)
+					muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+					check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 					count = 1
-					while check != b'\x04\x00\x00\x00':
+					while check != 0x4:
 						f.seek(-0x14, 1)
-						check = f.read(0x4)
+						muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 						count = count + 1
 					muImportCount = count
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
@@ -1568,11 +2012,13 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						muImportOffset = 0
 					else:
 						f.seek(os.path.getsize(resource_path) - 0x8, 0)
-						check = f.read(0x4)
+						muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 						count = 1
-						while check != b'\x50\x00\x00\x80':
+						while check != 0x50:
 							f.seek(-0x14, 1)
-							check = f.read(0x4)
+							muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+							check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 							count = count + 1
 						muImportCount = count
 						muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
@@ -1580,20 +2026,22 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				elif muResourceType == "LightInstanceList":
 					if game.lower() == "hp":
 						min_filesize = 0x10
-						pointer = b'\x50\x00\x00\x80'
+						pointer = 0x50
 					elif game.lower() == "hpr":
 						min_filesize = 0x20
-						pointer = b'\x60\x00\x00\x80'
+						pointer = 0x60
 					if os.path.getsize(resource_path) <= min_filesize:
 						muImportCount = 0
 						muImportOffset = 0
 					else:
 						f.seek(os.path.getsize(resource_path) - 0x8, 0)
-						check = f.read(0x4)
+						muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+						check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 						count = 1
 						while check != pointer:
 							f.seek(-0x14, 1)
-							check = f.read(0x4)
+							muImportTypeAndOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+							check, _ = get_importTypeAndOffset(muImportTypeAndOffset)
 							count = count + 1
 						muImportCount = count
 						muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
@@ -1603,18 +2051,22 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						f.seek(0x4, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x8, 0)
-					muImportOffset = struct.unpack("<I", f.read(0x4))[0]
+					muImportOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
 					muImportCount = int((os.path.getsize(resource_path) - muImportOffset)/0x10)
 					if muImportCount == 0:
 						muImportOffset = 0
 				
 				elif muResourceType == "BearEffect":
-					muImportCount = struct.unpack("<H", f.read(0x2))[0]	#issue in some cases
+					muImportCount = struct.unpack("%sH" % endian, f.read(0x2))[0]	#issue in some cases
 					if muImportCount == 0:
 						muImportOffset = 0
 					else:
 						#muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
-						f.seek(os.path.getsize(resource_path) - 0x5, 0)
+						if endian == "<":
+							pointer = 0x5
+						elif endian == ">":
+							pointer = 0x8
+						f.seek(os.path.getsize(resource_path) - pointer, 0)
 						check = f.read(0x1)
 						count = 0
 						while check == b'\x80':
@@ -1629,10 +2081,19 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						f.seek(0x12, 0)
 					elif game.lower() == "hpr":
 						f.seek(0x1E, 0)
-					muImportOffset = struct.unpack("<H", f.read(0x2))[0]
+					muImportOffset = struct.unpack("%sH" % endian, f.read(0x2))[0]
 					muImportCount = int((os.path.getsize(resource_path) - muImportOffset)/0x10)
 				
 				elif muResourceType == "VertexProgramState":
+					muImportCount = 2
+					if endian == ">":
+						muImportOffset = 0x30
+					elif game.lower() == "hp":
+						muImportOffset = 0x10
+					elif game.lower() == "hpr":
+						muImportOffset = 0x30
+				
+				elif muResourceType == "CgsVertexProgramState":
 					muImportCount = 2
 					if game.lower() == "hp":
 						muImportOffset = 0x10
@@ -1640,7 +2101,11 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						muImportOffset = 0x30
 				
 				elif muResourceType == "AnimationList":
-					f.seek(os.path.getsize(resource_path) - 0x5, 0)
+					if endian == "<":
+						pointer = 0x5
+					elif endian == ">":
+						pointer = 0x8
+					f.seek(os.path.getsize(resource_path) - pointer, 0)
 					check = f.read(0x1)
 					count = 0
 					while check == b'\x80':
@@ -1655,9 +2120,13 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 				
 				elif muResourceType == "GenesysInstance":
 					f.seek(os.path.getsize(resource_path) - 0x8, 0)
+					if endian == "<":
+						pointer = b'\x00\x00\x00\x80'
+					elif endian == ">":
+						pointer = b'\x80\x00\x00\x00'
 					check = f.read(0x4)
 					count = 1
-					while check != b'\x00\x00\x00\x80':
+					while check != pointer:
 						f.seek(-0x14, 1)
 						check = f.read(0x4)
 						count = count + 1
@@ -1665,7 +2134,11 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
 				
 				elif muResourceType == "Cutscene":
-					f.seek(os.path.getsize(resource_path) - 0x5, 0)
+					if endian == "<":
+						pointer = 0x5
+					elif endian == ">":
+						pointer = 0x8
+					f.seek(os.path.getsize(resource_path) - pointer, 0)
 					check = f.read(0x1)
 					count = 0
 					while check == b'\x80':
@@ -1673,10 +2146,17 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						check = f.read(0x1)
 						count = count + 1
 					muImportCount = count
-					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
+					if count != 0:
+						muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
+					else:
+						muImportOffset = 0
 				
 				elif muResourceType == "RoadData":
-					f.seek(os.path.getsize(resource_path) - 0x5, 0)
+					if endian == "<":
+						pointer = 0x5
+					elif endian == ">":
+						pointer = 0x8
+					f.seek(os.path.getsize(resource_path) - pointer, 0)
 					check = f.read(0x1)
 					count = 0
 					while check == b'\x80':
@@ -1684,106 +2164,173 @@ def pack_bundle_hp(resource_entries_path, output_directory, output_name, game):
 						check = f.read(0x1)
 						count = count + 1
 					muImportCount = count
-					muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
+					if count != 0:
+						muImportOffset = os.path.getsize(resource_path) - muImportCount*0x10
+					else:
+						muImportOffset = 0
 				
 				for i in range(0, muImportCount):
 					f.seek(muImportOffset + i*0x10, 0)
-					muImportHash = muImportHash | struct.unpack("<I", f.read(0x4))[0]
-					muImportHash2 = muImportHash2 | struct.unpack("<I", f.read(0x4))[0]
+					
+					if endian == "<":
+						muImportResourceId = bytes_to_id(f.read(0x4))
+						muImportResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+						muImportindex = struct.unpack("B", f.read(0x1))[0]
+						muImportIdType = struct.unpack("B", f.read(0x1))[0]
+						f.seek(-0x4, 1)
+						muImportHash2 = muImportHash2 | struct.unpack("%sI" % endian, f.read(0x4))[0]
+					else:
+						muImportIdType = struct.unpack("B", f.read(0x1))[0]
+						muImportindex = struct.unpack("B", f.read(0x1))[0]
+						muImportResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+						f.seek(-0x4, 1)
+						muImportHash2 = muImportHash2 | struct.unpack("%sI" % endian, f.read(0x4))[0]
+						muImportResourceId = bytes_to_id(f.read(0x4))
+					
+					muImportHash = muImportHash | id_to_int(muImportResourceId, endian)
+					
+					if check_for_missing_imports == True:
+						import_file_name = muImportResourceId
+						if muImportResourceTypeId != 0:
+							import_file_name += "_" + str(muImportResourceTypeId) 
+							if muImportindex != 0:
+								import_file_name += "_" + str(muImportindex)
+						elif muImportResourceTypeId == 0 and muImportindex != 0:
+							import_file_name += "_" + str(muImportResourceTypeId)
+							import_file_name += "_" + str(muImportindex)
+						
+						muImportFilenames.append(import_file_name)
+						
+						if import_file_name not in [os.path.basename(mResource[3]).split(".")[0] for mResource in mResources]:
+							if import_file_name not in [shared_resource[5] for shared_resource in shared_resources]:
+								print("Debug: resource %s is likely missing. It is imported by %s %s." % (import_file_name, muResourceType, mResourceId))
 		
-		mResource.extend([int(muImportOffset), muImportCount, muImportHash, muImportHash2])
+		mResource.extend([int(muImportOffset), muImportCount, muImportHash, muImportHash2, muImportFilenames])
+	
+	if isinstance(debug_data, str):
+		len_debug_data = len(debug_data.encode())
+	else:
+		len_debug_data = len(debug_data)
+	
+	if ".json" in os.path.basename(resource_entries_path):
+		len_resource_entries_data = muResourceEntriesOffset + muResourceEntriesCount*0x50
 	
 	padding = calculate_padding(len_resource_entries_data + len(resources_data), 0x80)
-	#padding = 0
 	padding2 = calculate_padding(len_resource_entries_data + len(resources_data) + padding + len(resources_data_body), 0x80)
-	#padding2 = 0
-	padding3 = calculate_padding(len_resource_entries_data + len(resources_data) + padding + len(resources_data_body) + padding2 + len(debug_data), 0x80)
+	padding3 = calculate_padding(len_resource_entries_data + len(resources_data) + padding + len(resources_data_body) + padding2 + len(resources_data2), 0x80)
+	padding4 = calculate_padding(len_resource_entries_data + len(resources_data) + padding + len(resources_data_body) + padding2 + len(resources_data2) + padding3 + len(resources_data3), 0x80)
+	padding5 = calculate_padding(len_resource_entries_data + len(resources_data) + padding + len(resources_data_body) + padding2 + len(resources_data2) + padding3 + len(resources_data3) + padding4 + len_debug_data, 0x80)
+	
 	mauResourceDataOffset = [*mauResourceDataOffset]
 	mauResourceDataOffset[0] = muResourceEntriesOffset + muResourceEntriesCount*0x50
 	mauResourceDataOffset[1] = mauResourceDataOffset[0] + len(resources_data) + padding
 	mauResourceDataOffset[2] = mauResourceDataOffset[1] + len(resources_data_body) + padding2
-	mauResourceDataOffset[3] = mauResourceDataOffset[2]
+	mauResourceDataOffset[3] = mauResourceDataOffset[2] + len(resources_data2) + padding3
+	mauResourceDataOffset_end = mauResourceDataOffset[3] + len(resources_data3) + padding4
 	
-	if muDebugDataOffset > mauResourceDataOffset[3]:
-		muDebugDataOffset = mauResourceDataOffset[3]
+	if muDebugDataOffset > mauResourceDataOffset_end:
+		muDebugDataOffset = mauResourceDataOffset_end
 	
 	# Unpacked nibbles
 	nibbles_2 = [0x40000000, 0x70000000, 0x70000000, 0x70000000]
 	
 	with open(output_path, "wb") as f:
 		f.write(macMagicNumber.encode('utf-8'))
-		f.write(struct.pack('<%s' % data_type[0], muVersion))
-		f.write(struct.pack('<%s' % data_type[0], muPlatform))
-		f.write(struct.pack('<I', muDebugDataOffset))
-		f.write(struct.pack('<I', muResourceEntriesCount))
-		f.write(struct.pack('<I', muResourceEntriesOffset))
-		f.write(struct.pack('<%dI' % numDataOffsets, *mauResourceDataOffset))
-		f.write(struct.pack('<I', muFlags))
-		f.write(struct.pack('<I', pad1))
+		f.write(struct.pack('%s%s' % (endian, data_type[0]), muVersion))
+		f.write(struct.pack('%s%s' % (endian, data_type[0]), muPlatform))
+		f.write(struct.pack('%sI' % endian, muDebugDataOffset))
+		f.write(struct.pack('%sI' % endian, muResourceEntriesCount))
+		f.write(struct.pack('%sI' % endian, muResourceEntriesOffset))
+		f.write(struct.pack('%s%dI' % (endian, numDataOffsets), *mauResourceDataOffset))
+		f.write(struct.pack('%sI' % endian, muFlags))
+		f.write(struct.pack('%sI' % endian, pad1))
 		
 		#f.write(debug_data)
-		f.write(notes_data)
+		f.write(custom_data)
 		
 		for mResource in mResources:
 			mResourceId = mResource[0]
 			muResourceType = mResource[1]
 			nibbles = mResource[2]
-			countBlock = mResource[5]
-			count = mResource[6]
-			isIdInteger = mResource[7]
-			muStreamIndex = mResource[8]
-			mauDiskOffset = mResource[9]
-			mauUncompressedSize = mResource[10]
-			mauSizeOnDisk = mResource[11]
-			muImportOffset = mResource[12]
-			muImportCount = mResource[13]
-			muImportHash = mResource[14]
-			muImportHash2 = mResource[15]
+			ResourceTypeId = mResource[7]
+			index = mResource[8]
+			IdType = mResource[9]
+			muStreamIndex = mResource[10]
+			mauDiskOffset = mResource[11]
+			mauUncompressedSize = mResource[12]
+			mauSizeOnDisk = mResource[13]
+			muImportOffset = mResource[14]
+			muImportCount = mResource[15]
+			muImportHash = mResource[16]
+			muImportHash2 = mResource[17]
+			muImportFilenames = mResource[18]
 			
 			if game.lower() == "hp":
-				muResourceTypeId, nibbles = get_resourcetypeid_nibble_hp(muResourceType)
+				muResourceTypeId, nibbles = get_resourcetypeid_nibble_hp(muResourceType, muPlatform)
+				
+				if muResourceType == "ShaderProgramBuffer" and muPlatform == 0x3:
+					if mauUncompressedSize[0] < 256: # CPU Shaders for PS3 use nibble 4, that means their alignment is 16 bytes
+						nibbles[0] = 0x40000000
+					else: # RSX Shaders for PS3 use nibble 7, that means their alignment is 128 bytes
+						nibbles[0] = 0x70000000
+				
 			elif game.lower() == "hpr":
 				muResourceTypeId, nibbles = get_resourcetypeid_nibble_hpr(muResourceType)
 			
-			mauUncompressedSizeAndAlignment = [mauUncompressedSize[i] + nibbles[i] for i in range(numDataOffsets)]
+			mauUncompressedSizeAndAlignment = [mauUncompressedSize[i] + nibbles[i] if mauUncompressedSize[i] != 0 else mauUncompressedSize[i] for i in range(numDataOffsets)]
 			
 			if muFlags % 2 == 0:
-				if muResourceType not in ('GenesysDefinition', 'GenesysInstance', 'Wave','PathAnimation'):
+				if muResourceType not in ('GenesysDefinition', 'GenesysInstance', 'Wave', 'PathAnimation'):
 					mauSizeOnDisk = [mauSizeOnDisk[i] + nibbles_2[i] for i in range(numDataOffsets)]
 			
-			f.write(id_to_bytes(mResourceId))
-			if muResourceType == 'ControlMesh': # Proper fix would be better
-				f.write(struct.pack("<H", muResourceTypeId))
+			if endian == "<":
+				f.write(id_to_bytes(mResourceId))
+				f.write(struct.pack("%sH" % endian, ResourceTypeId))
+				f.write(struct.pack("B", index))
+				f.write(struct.pack("B", IdType))
+				
+				f.write(struct.pack("<I", muImportHash))
+				f.write(struct.pack("<I", muImportHash2))
 			else:
-				f.write(struct.pack("<B", countBlock))
-				f.write(struct.pack("<B", 0))
-			f.write(struct.pack("<B", count))
-			f.write(struct.pack("<B", isIdInteger))
-			f.write(struct.pack("<I", muImportHash))
-			#f.write(struct.pack("<I", 0))
-			f.write(struct.pack("<I", muImportHash2))
-			f.write(struct.pack("<%dI" % numDataOffsets, *mauUncompressedSizeAndAlignment))
-			f.write(struct.pack("<%dI" % numDataOffsets, *mauSizeOnDisk))
-			f.write(struct.pack("<%dI" % numDataOffsets, *mauDiskOffset))
-			f.write(struct.pack("<I", muImportOffset))
-			f.write(struct.pack("<I", muResourceTypeId))
-			f.write(struct.pack("<H", muImportCount))
-			f.write(struct.pack("<B", 0))
-			f.write(struct.pack("<B", muStreamIndex))
-			f.write(struct.pack("<I", 0))
+				f.write(struct.pack("B", IdType))
+				f.write(struct.pack("B", index))
+				f.write(struct.pack("%sH" % endian, ResourceTypeId))
+				f.write(id_to_bytes(mResourceId))
+				
+				f.write(struct.pack(">I", muImportHash2))
+				f.write(struct.pack(">I", muImportHash))
+			
+			f.write(struct.pack("%s%dI" % (endian, numDataOffsets), *mauUncompressedSizeAndAlignment))
+			f.write(struct.pack("%s%dI" % (endian, numDataOffsets), *mauSizeOnDisk))
+			f.write(struct.pack("%s%dI" % (endian, numDataOffsets), *mauDiskOffset))
+			f.write(struct.pack("%sI" % endian, muImportOffset))
+			f.write(struct.pack("%sI" % endian, muResourceTypeId))
+			f.write(struct.pack("%sH" % endian, muImportCount))
+			f.write(struct.pack("B", 0))
+			f.write(struct.pack("B", muStreamIndex))
+			f.write(struct.pack("%sI" % endian, 0))
 		
 		f.write(resources_data)
 		f.write(bytearray([0])*padding)
 		f.write(resources_data_body)
 		f.write(bytearray([0])*padding2)
-		#f.write(debug_data)
+		f.write(resources_data2)
+		f.write(bytearray([0])*padding3)
+		f.write(resources_data3)
+		f.write(bytearray([0])*padding4)
 		
-		if (muFlags>>3)&1 == 1: # Cheking if debug data bit is equal 1
-			f.write(debug_data)
+		if ".json" in os.path.basename(resource_entries_path) and "E_FLAGS_CONTAINS_DEBUG_DATA" in flags and len(debug_data) > 0:
+			f.write(debug_data.encode())
+		
+		elif (muFlags>>3)&1 == 1: # Cheking if debug data bit is equal 1
+			if isinstance(debug_data, str):
+				f.write(debug_data.encode())
+			elif len(debug_data) > 0:
+				f.write(debug_data)
 		
 		if muFlags % 2 == 0:
 			# There is padding in this case
-			f.write(bytearray([0])*padding3)
+			f.write(bytearray([0])*padding5)
 	
 	return 0
 
@@ -1795,8 +2342,9 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 	
 	ignore_not_found = False
 	ignore_duplicated_resources = False
+	check_for_missing_imports = False
 	
-	if ".json" in os.path.basename(resource_entries_path):
+	if ".json" in os.path.basename(resource_entries_path).lower():
 		with open(resource_entries_path, 'r') as f:
 			json_data = json.load(f)
 		
@@ -1842,7 +2390,7 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 		numDataOffsets = 4
 		macMagicNumber = 'bnd2'
 		muVersion = 0x5
-		muPlatform = set_platform(platform)
+		muPlatform = set_platform(platform, "mw")
 		muDebugDataOffset = 0xFFFFFFFF
 		muResourceEntriesCount = -1
 		muResourceEntriesOffset = 0x70
@@ -1851,6 +2399,7 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 		mDefaultResourceId = int(mDefaultResourceId, 16)
 		macStreamName = list(ResourceEntries.keys())
 		custom_data = b''
+		main_resource_type = ""
 		
 		if muPlatform == 0x1:
 			print("Info: bundle platform is PC or PS4.")
@@ -1919,6 +2468,13 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 				mResourceId = int_to_id(ResourceId, endian)
 				IdType = set_idtype(IdType)
 				
+				if muResourceType == "GraphicsSpec":
+					main_resource_type = "VEH"
+				elif muResourceType == "InstanceList":
+					main_resource_type = "TRK"
+				elif muResourceType == "CharacterSpec":
+					main_resource_type = "CHR"
+				
 				if ignore_not_found == True:
 					file_name = mResourceId
 					if ResourceTypeId != 0:
@@ -1975,6 +2531,7 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 			
 			data_type = ["H", 0x2]
 			numDataOffsets = 4
+			main_resource_type = ""
 			
 			f.seek(0x4 + data_type[1], 0)
 			muPlatform = f.read(data_type[1])
@@ -2050,6 +2607,13 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 				
 				muResourceType, nibbles = get_resourcetype_nibble_mw(muResourceTypeId)
 				
+				if muResourceType == "GraphicsSpec":
+					main_resource_type = "VEH"
+				elif muResourceType == "InstanceList":
+					main_resource_type = "TRK"
+				elif muResourceType == "CharacterSpec":
+					main_resource_type = "CHR"
+				
 				if ignore_not_found == True:
 					file_name = mResourceId
 					if ResourceTypeId != 0:
@@ -2086,7 +2650,42 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 						continue
 				
 				mResources.append([mResourceId, muResourceType, nibbles, "", "", "", "", ResourceTypeId, index, IdType, muStreamIndex])
+	
+	if check_for_missing_imports == True:
+		shared_resources_dir = r"C:\Users\USERNAME\AppData\Roaming\Blender Foundation\Blender\3.6\scripts\addons\NeedForSpeedMostWanted2012\NFSMW_Library_PC"
+		shared_resources = []
 		
+		if main_resource_type == "VEH":
+			for shared_file in os.listdir(shared_resources_dir):
+				shared_file_path = os.path.join(shared_resources_dir, shared_file)
+				if not os.path.isfile(shared_file_path):
+					continue
+				
+				if any(k in shared_file.upper() for k in ("SHADERS", "COMPETITORSOUNDS", "RUMBLELIST", "TRAFFICATTRIBS", "VEHICLETEX", "WAVES", "GLOBALEFFECTS", "GLOBALMATERIALDICTIONARY")):
+					shared_resources.extend(read_resources_table_mw(shared_file_path))
+		
+		elif main_resource_type == "TRK":
+			for shared_file in os.listdir(shared_resources_dir):
+				shared_file_path = os.path.join(shared_resources_dir, shared_file)
+				if not os.path.isfile(shared_file_path):
+					continue
+				
+				if any(k in shared_file.upper() for k in ("SHADERS", "AMBIENCES", "ARENA", "DISTRICT", "ENVIRONMENT", "GLOBALRESOURCES", "SHAREDWAVES", "SURFACELIST", "SURFACESOUNDS", "GLOBALEFFECTS", "GLOBALMATERIALDICTIONARY")):
+					shared_resources.extend(read_resources_table_mw(shared_file_path))
+		
+		elif main_resource_type == "CHR":
+			for shared_file in os.listdir(shared_resources_dir):
+				shared_file_path = os.path.join(shared_resources_dir, shared_file)
+				if not os.path.isfile(shared_file_path):
+					continue
+				
+				if any(k in shared_file.upper() for k in ("SHADERS", "GLOBALEFFECTS", "GLOBALMATERIALDICTIONARY")):
+					shared_resources.extend(read_resources_table_mw(shared_file_path))
+		
+		# Removing some resource types from the list because they usually are included in the files
+		shared_resources[:] = [shared_resource for shared_resource in shared_resources
+								if shared_resource[1] not in ("GenesysType", "GenesysObject", "GenesysDefinition", "GenesysInstance")]
+	
 	for i, mResource in enumerate(mResources):
 		(
 			mResourceId,
@@ -2323,6 +2922,7 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 		muImportCount = 0
 		muImportOffset = 0
 		muImportHash = 0
+		muImportFilenames = []
 		
 		if muResourceType in ('InstanceList', 'CharacterSpec', 'GraphicsSpec', 'Model', 'Renderable', 'Material', 'GenesysObject', 'GenesysType', 'VehicleSound',
 							  'PropInstanceList', 'PropObject', 'WorldObject', 'GroundcoverCollection', 'ReverbRoadData', 'TrafficData', 'CameraTakeList',
@@ -2642,9 +3242,38 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 				
 				for i in range(0, muImportCount):
 					f.seek(muImportOffset + i*0x10, 0)
-					muImportHash = muImportHash | struct.unpack("<I", f.read(0x4))[0]
+					#muImportHash = muImportHash | struct.unpack("<I", f.read(0x4))[0]
+					
+					if endian == "<":
+						muImportResourceId = bytes_to_id(f.read(0x4))
+						muImportResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+						muImportindex = struct.unpack("B", f.read(0x1))[0]
+						muImportIdType = struct.unpack("B", f.read(0x1))[0]
+					else:
+						muImportIdType = struct.unpack("B", f.read(0x1))[0]
+						muImportindex = struct.unpack("B", f.read(0x1))[0]
+						muImportResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+						muImportResourceId = bytes_to_id(f.read(0x4))
+					
+					muImportHash = muImportHash | id_to_int(muImportResourceId, endian)
+					
+					if check_for_missing_imports == True:
+						import_file_name = muImportResourceId
+						if muImportResourceTypeId != 0:
+							import_file_name += "_" + str(muImportResourceTypeId) 
+							if muImportindex != 0:
+								import_file_name += "_" + str(muImportindex)
+						elif muImportResourceTypeId == 0 and muImportindex != 0:
+							import_file_name += "_" + str(muImportResourceTypeId)
+							import_file_name += "_" + str(muImportindex)
+						
+						muImportFilenames.append(import_file_name)
+						
+						if import_file_name not in [os.path.basename(mResource[3]).split(".")[0] for mResource in mResources]:
+							if import_file_name not in [shared_resource[5] for shared_resource in shared_resources]:
+								print("Debug: resource %s is likely missing. It is imported by %s %s." % (import_file_name, muResourceType, mResourceId))
 		
-		mResource.extend([int(muImportOffset), muImportCount, muImportHash])
+		mResource.extend([int(muImportOffset), muImportCount, muImportHash, muImportFilenames])
 	
 	#padding = calculate_padding(len_resource_entries_data + len(resources_data), 0x80)
 	padding = 0
@@ -2692,6 +3321,7 @@ def pack_bundle_mw(resource_entries_path, output_directory, output_name, split_b
 			muImportOffset = mResource[14]
 			muImportCount = mResource[15]
 			muImportHash = mResource[16]
+			muImportFilenames = mResource[17]
 			
 			muResourceTypeId, nibbles = get_resourcetypeid_nibble_mw(muResourceType)
 			
@@ -2912,12 +3542,18 @@ def unpack_bundle_bndl(f, save_directory, ids_table_name="IDsList.BIN", endian="
 	return 0
 
 
-def get_platform(Platform):
-	Platforms = {0x1: 'PC',
-				 0x2: 'PS3',
-				 0x3: 'X360',
-				 0x4: 'VITA',
-				 0x5: 'WiiU'}
+def get_platform(Platform, game):
+	game = game.lower()
+	if game == "hp" or game == "hpr":
+		Platforms = {0x1: 'PC',
+					 0x2: 'X360',
+					 0x3: 'PS3'}
+	elif game == "mw":
+		Platforms = {0x1: 'PC',
+					 0x2: 'PS3',
+					 0x3: 'X360',
+					 0x4: 'VITA',
+					 0x5: 'WiiU'}
 	
 	if Platform in Platforms:
 		return Platforms[Platform]
@@ -2925,13 +3561,20 @@ def get_platform(Platform):
 	return Platform
 
 
-def set_platform(Platform):
-	Platforms = {'PC': 0x1,
-				 'PS4': 0x1,
-				 'PS3': 0x2,
-				 'X360': 0x3,
-				 'VITA': 0x4,
-				 'WiiU': 0x5}
+def set_platform(Platform, game):
+	game = game.lower()
+	if game == "hp" or game == "hpr":
+		Platforms = {'PC': 0x1,
+					 'PS4': 0x1,
+					 'X360': 0x2,
+					 'PS3': 0x3}
+	elif game == "mw":
+		Platforms = {'PC': 0x1,
+					 'PS4': 0x1,
+					 'PS3': 0x2,
+					 'X360': 0x3,
+					 'VITA': 0x4,
+					 'WiiU': 0x5}
 	
 	if Platform in Platforms:
 		return Platforms[Platform]
@@ -2963,22 +3606,33 @@ def set_idtype(Type):
 	return Type
 
 
-def interpret_bundle_flags(Flags):
+def interpret_bundle_flags(Flags, game="mw"):
     information = []
+
+    if game.lower() == "mw":
+        get_bundle_flags_function = get_bundle_flags
+    elif "hp" in game.lower():
+        get_bundle_flags_function = get_bundle_flags_hp
     
     for bit_position in range(8):  # Check each bit position in the first byte
         flag = (Flags >> bit_position) & 0b1  # Extract bit at position
         if flag:  # If the bit is set
             flag_value = 1 << bit_position  # Compute the actual flag value
-            information.append(get_bundle_flags(flag_value))  # Get the flag name
+            information.append(get_bundle_flags_function(flag_value))  # Get the flag name
     
     return information
 
 
-def construct_bundle_flags(interpretations):
+def construct_bundle_flags(interpretations, game="mw"):
     Flags = 0
+
+    if game.lower() == "mw":
+        set_bundle_flags_function = set_bundle_flags
+    elif "hp" in game.lower():
+        set_bundle_flags_function = set_bundle_flags_hp
+
     for interpretation in interpretations:
-        flag_value = set_bundle_flags(interpretation)
+        flag_value = set_bundle_flags_function(interpretation)
         
         if not isinstance(flag_value, int):
             raise ValueError(f"Warning: unknown flag {interpretation}")
@@ -3011,6 +3665,38 @@ def set_bundle_flags(Flag):
 				   'E_FLAGS_MULTISTREAM_BUNDLE': 0x8,
 				   'E_FLAGS_DELTA_BUNDLE': 0x10,
 				   'E_FLAGS_CONTAINS_DEFAULT_RESOURCE': 0x20}
+	
+	if Flag in BundleFlags:
+		return BundleFlags[Flag]
+	
+	return Flag
+
+
+def get_bundle_flags_hp(Flag):
+	BundleFlags = {0x0:  'E_FLAGS_DEFAULT',
+				   0x1:  'E_FLAGS_ZLIB_COMPRESSION',
+				   0x2:  'E_FLAGS_MAIN_MEM_OPTIMISATION',
+				   0x4:  'E_FLAGS_GRAPHICS_MEM_OPTIMISATION',
+				   0x8:  'E_FLAGS_CONTAINS_DEBUG_DATA',
+				   0x10: 'E_FLAGS_NON_ASYNCH_FIXUP_REQUIRED',
+				   0x20: 'E_FLAGS_MULTISTREAM_BUNDLE',
+				   0x40: 'E_FLAGS_DELTA_BUNDLE'}
+	
+	if Flag in BundleFlags:
+		return BundleFlags[Flag]
+	
+	return Flag
+
+
+def set_bundle_flags_hp(Flag):
+	BundleFlags = {'E_FLAGS_DEFAULT': 0x0,
+				   'E_FLAGS_ZLIB_COMPRESSION': 0x1,
+				   'E_FLAGS_MAIN_MEM_OPTIMISATION': 0x2,
+				   'E_FLAGS_GRAPHICS_MEM_OPTIMISATION': 0x4,
+				   'E_FLAGS_CONTAINS_DEBUG_DATA': 0x8,
+				   'E_FLAGS_NON_ASYNCH_FIXUP_REQUIRED': 0x10,
+				   'E_FLAGS_MULTISTREAM_BUNDLE': 0x20,
+				   'E_FLAGS_DELTA_BUNDLE': 0x40}
 	
 	if Flag in BundleFlags:
 		return BundleFlags[Flag]
@@ -3137,60 +3823,177 @@ def get_resourcetype_nibble(resource_id):
 	return resource_nibble[resource_id]
 
 
-def get_resourcetype_nibble_hp(resource_id):
-	resource_nibble = {	0x00000001 : ['Texture', [0x20000000, 0x40000000, 0x0, 0x0]],
-						0x00000002 : ['Material', [0x0, 0x0, 0x0, 0x0]],
-						0x00000003 : ['VertexDescriptor', [0x20000000, 0x0, 0x0, 0x0]],
-						0x00000004 : ['VertexProgramState', [0x20000000, 0x0, 0x0, 0x0]],
-						0x00000005 : ['Renderable', [0x40000000, 0x40000000, 0x0, 0x0]],
-						0x00000006 : ['MaterialState', [0x0, 0x0, 0x0, 0x0]],
-						0x00000007 : ['SamplerState', [0x20000000, 0x0, 0x0, 0x0]],
-						0x00000008 : ['ShaderProgramBuffer', [0x40000000, 0x20000000, 0x0, 0x0]],
-						0x00000012 : ['GenesysDefinition', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000013 : ['GenesysInstance', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000030 : ['Font', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000050 : ['InstanceList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000051 : ['Model', [0x0, 0x0, 0x0, 0x0]],
-						0x00000052 : ['ColourCube', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000053 : ['Shader', [0x0, 0x0, 0x0, 0x0]],
-						0x00000060 : ['PolygonSoupList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000070 : ['TextFile', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000080 : ['Ginsu', [0x20000000, 0x0, 0x0, 0x0]],
-						0x00000081 : ['Wave', [0x70000000, 0x0, 0x0, 0x0]],
-						0x00000090 : ['ZoneList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000091 : ['WorldPaintMap', [0x70000000, 0x0, 0x0, 0x0]],
-						0x000000b0 : ['AnimationList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x000000b1 : ['PathAnimation', [0x40000000, 0x0, 0x0, 0x0]],
-						0x000000b2 : ['Skeleton', [0x40000000, 0x0, 0x0, 0x0]],
-						0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],	#PS3
-						0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
-						0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000201 : ['Language', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000202 : ['TriggerData', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000203 : ['RoadData', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000204 : ['DynamicInstanceList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000205 : ['WorldObject', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000206 : ['ZoneHeader', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000207 : ['VehicleSound', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000208 : ['RoadMapData', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000209 : ['CharacterSpec', [0x40000000, 0x0, 0x0, 0x0]],
-						0x0000020a : ['CharacterList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x0000020c : ['ReverbRoadData', [0x30000000, 0x0, 0x0, 0x0]],
-						0x0000020d : ['CameraTake', [0x40000000, 0x0, 0x0, 0x0]],
-						0x0000020e : ['CameraTakeList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x0000020f : ['GroundcoverCollection', [0x70000000, 0x0, 0x0, 0x0]],
-						0x00000210 : ['ControlMesh', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000211 : ['Cutscene', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000212 : ['CutsceneList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000213 : ['LightInstanceList', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000214 : ['GroundcoverInstances', [0x70000000, 0x0, 0x0, 0x0]],
-						0x00000301 : ['BearEffect', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000302 : ['BearGlobalParameters', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000303 : ['ConvexHull', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000501 : ['HSMData', [0x40000000, 0x0, 0x0, 0x0]],
-						0x00000701 : ['TrafficData', [0x40000000, 0x0, 0x0, 0x0]]}
+def get_resourcetype_nibble_hp(resource_id, muPlatform=1):
+	if muPlatform == 0x1:	# PC
+		resource_nibble = {	0x00000001 : ['Texture', [0x20000000, 0x40000000, 0x0, 0x0]],
+							0x00000002 : ['Material', [0x0, 0x0, 0x0, 0x0]],
+							0x00000003 : ['VertexDescriptor', [0x20000000, 0x0, 0x0, 0x0]],
+							0x00000004 : ['VertexProgramState', [0x20000000, 0x0, 0x0, 0x0]],
+							0x00000005 : ['Renderable', [0x40000000, 0x40000000, 0x0, 0x0]],
+							0x00000006 : ['MaterialState', [0x0, 0x0, 0x0, 0x0]],
+							0x00000007 : ['SamplerState', [0x20000000, 0x0, 0x0, 0x0]],
+							0x00000008 : ['ShaderProgramBuffer', [0x40000000, 0x20000000, 0x0, 0x0]],
+							0x00000012 : ['GenesysDefinition', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000013 : ['GenesysInstance', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000030 : ['Font', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000050 : ['InstanceList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000051 : ['Model', [0x0, 0x0, 0x0, 0x0]],
+							0x00000052 : ['ColourCube', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000053 : ['Shader', [0x0, 0x0, 0x0, 0x0]],
+							0x00000060 : ['PolygonSoupList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000070 : ['TextFile', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000080 : ['Ginsu', [0x20000000, 0x0, 0x0, 0x0]],
+							0x00000081 : ['Wave', [0x70000000, 0x0, 0x0, 0x0]],
+							0x00000090 : ['ZoneList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000091 : ['WorldPaintMap', [0x70000000, 0x0, 0x0, 0x0]],
+							0x000000b0 : ['AnimationList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x000000b1 : ['PathAnimation', [0x40000000, 0x0, 0x0, 0x0]],
+							0x000000b2 : ['Skeleton', [0x40000000, 0x0, 0x0, 0x0]],
+							0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+							0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
+							0x000000de : ['DeltaDeleted', [0x0, 0x0, 0x0, 0x0]],		#X360 beta
+							0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000201 : ['Language', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000202 : ['TriggerData', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000203 : ['RoadData', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000204 : ['DynamicInstanceList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000205 : ['WorldObject', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000206 : ['ZoneHeader', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000207 : ['VehicleSound', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000208 : ['RoadMapData', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000209 : ['CharacterSpec', [0x40000000, 0x0, 0x0, 0x0]],
+							0x0000020a : ['CharacterList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x0000020c : ['ReverbRoadData', [0x30000000, 0x0, 0x0, 0x0]],
+							0x0000020d : ['CameraTake', [0x40000000, 0x0, 0x0, 0x0]],
+							0x0000020e : ['CameraTakeList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x0000020f : ['GroundcoverCollection', [0x70000000, 0x0, 0x0, 0x0]],
+							0x00000210 : ['ControlMesh', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000211 : ['Cutscene', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000212 : ['CutsceneList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000213 : ['LightInstanceList', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000214 : ['GroundcoverInstances', [0x70000000, 0x0, 0x0, 0x0]],
+							0x00000301 : ['BearEffect', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000302 : ['BearGlobalParameters', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000303 : ['ConvexHull', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000501 : ['HSMData', [0x40000000, 0x0, 0x0, 0x0]],
+							0x00000701 : ['TrafficData', [0x40000000, 0x0, 0x0, 0x0]]}
+	elif muPlatform == 0x2:	# X360 # OK
+		resource_nibble = {
+							0x00000001 : ['Texture', [0x20000000, 0xC0000000, 0x00000000, 0x00000000]],
+							0x00000002 : ['Material', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000003 : ['VertexDescriptor', [0x20000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000004 : ['VertexProgramState', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000005 : ['Renderable', [0x40000000, 0x20000000, 0x00000000, 0x00000000]],
+							0x00000006 : ['MaterialState', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000007 : ['SamplerState', [0x20000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000008 : ['ShaderProgramBuffer', [0x40000000, 0x50000000, 0x00000000, 0x00000000]],
+							0x00000012 : ['GenesysDefinition', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000013 : ['GenesysInstance', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000030 : ['Font', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000050 : ['InstanceList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000051 : ['Model', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000052 : ['ColourCube', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000053 : ['Shader', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000060 : ['PolygonSoupList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000070 : ['TextFile', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000080 : ['Ginsu', [0x20000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000081 : ['Wave', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000090 : ['ZoneList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000091 : ['WorldPaintMap', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000b0 : ['AnimationList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000b1 : ['PathAnimation', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000b2 : ['Skeleton', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x00000000, 0x00000000, 0x20000000]],
+							0x000000de : ['DeltaDeleted', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000105 : ['VehicleList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000106 : ['GraphicsSpec', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000200 : ['AIData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000201 : ['Language', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000202 : ['TriggerData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000203 : ['RoadData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000204 : ['DynamicInstanceList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000205 : ['WorldObject', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000206 : ['ZoneHeader', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000207 : ['VehicleSound', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000208 : ['RoadMapData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000209 : ['CharacterSpec', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020a : ['CharacterList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020c : ['ReverbRoadData', [0x30000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020d : ['CameraTake', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020e : ['CameraTakeList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020f : ['GroundcoverCollection', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000210 : ['ControlMesh', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000211 : ['Cutscene', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000212 : ['CutsceneList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000213 : ['LightInstanceList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000214 : ['GroundcoverInstances', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000301 : ['BearEffect', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000302 : ['BearGlobalParameters', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000303 : ['ConvexHull', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000501 : ['HSMData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000701 : ['TrafficData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]]
+							}
+	
+	elif muPlatform == 0x3:	# PS3
+		resource_nibble = {
+							0x00000001 : ['Texture', [0x40000000, 0x00000000, 0x70000000, 0x00000000]],
+							0x00000002 : ['Material', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000003 : ['VertexDescriptor', [0x20000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000004 : ['VertexProgramState', [0x20000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000005 : ['Renderable', [0x40000000, 0x40000000, 0x00000000, 0x00000000]],
+							0x00000006 : ['MaterialState', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000007 : ['SamplerState', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000008 : ['ShaderProgramBuffer', [0x70000000, 0x70000000, 0x00000000, 0x00000000]],
+							0x00000012 : ['GenesysDefinition', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000013 : ['GenesysInstance', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000030 : ['Font', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000050 : ['InstanceList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000051 : ['Model', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000052 : ['ColourCube', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000053 : ['Shader', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000060 : ['PolygonSoupList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000070 : ['TextFile', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000080 : ['Ginsu', [0x20000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000081 : ['Wave', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000090 : ['ZoneList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000091 : ['WorldPaintMap', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000b0 : ['AnimationList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000b1 : ['PathAnimation', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000b2 : ['Skeleton', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x00000000, 0x00000000, 0x20000000]],
+							0x000000de : ['DeltaDeleted', [0x00000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000105 : ['VehicleList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000106 : ['GraphicsSpec', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000200 : ['AIData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000201 : ['Language', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000202 : ['TriggerData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000203 : ['RoadData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000204 : ['DynamicInstanceList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000205 : ['WorldObject', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000206 : ['ZoneHeader', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000207 : ['VehicleSound', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000208 : ['RoadMapData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000209 : ['CharacterSpec', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020a : ['CharacterList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020c : ['ReverbRoadData', [0x30000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020d : ['CameraTake', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020e : ['CameraTakeList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x0000020f : ['GroundcoverCollection', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000210 : ['ControlMesh', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000211 : ['Cutscene', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000212 : ['CutsceneList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000213 : ['LightInstanceList', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000214 : ['GroundcoverInstances', [0x70000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000301 : ['BearEffect', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000302 : ['BearGlobalParameters', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000303 : ['ConvexHull', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000501 : ['HSMData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]],
+							0x00000701 : ['TrafficData', [0x40000000, 0x00000000, 0x00000000, 0x00000000]]
+							}
 	
 	return resource_nibble[resource_id]
 
@@ -3222,6 +4025,7 @@ def get_resourcetype_nibble_hpr(resource_id):
 						0x000000b2 : ['Skeleton', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000c0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],	#PS3
 						0x000000c1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
+						0x000000de : ['DeltaDeleted', [0x0, 0x0, 0x0, 0x0]],		#X360 beta
 						0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
@@ -3289,6 +4093,7 @@ def get_resourcetype_nibble_mw(resource_id):
 						0x000000b3 : ['Animation', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000C0 : ['CgsVertexProgramState', [0x40000000, 0x0, 0x0, 0x0]],
 						0x000000C1 : ['CgsProgramBuffer', [0x40000000, 0x0, 0x0, 0x40000000]],
+						0x000000DE : ['DeltaDeleted', [0x0, 0x0, 0x0, 0x0]],
 						0x00000105 : ['VehicleList', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000106 : ['GraphicsSpec', [0x40000000, 0x0, 0x0, 0x0]],
 						0x00000200 : ['AIData', [0x40000000, 0x0, 0x0, 0x0]],
@@ -3443,60 +4248,174 @@ def get_resourcetypeid_nibble(resource_type):
 	return resource_nibble[resource_type]
 
 
-def get_resourcetypeid_nibble_hp(resource_type):
-	resource_nibble = {	'Texture': [0x00000001, [0x20000000, 0x40000000, 0x0, 0x0]],
-						'Material': [0x00000002, [0x0, 0x0, 0x0, 0x0]],
-						'VertexDescriptor': [0x00000003, [0x20000000, 0x0, 0x0, 0x0]],
-						'VertexProgramState': [0x00000004, [0x20000000, 0x0, 0x0, 0x0]],
-						'Renderable': [0x00000005, [0x40000000, 0x40000000, 0x0, 0x0]],
-						'MaterialState': [0x00000006, [0x0, 0x0, 0x0, 0x0]],
-						'SamplerState': [0x00000007, [0x20000000, 0x0, 0x0, 0x0]],
-						'ShaderProgramBuffer': [0x00000008, [0x40000000, 0x20000000, 0x0, 0x0]],
-						'GenesysDefinition': [0x00000012, [0x40000000, 0x0, 0x0, 0x0]],
-						'GenesysInstance': [0x00000013, [0x40000000, 0x0, 0x0, 0x0]],
-						'Font': [0x00000030, [0x40000000, 0x0, 0x0, 0x0]],
-						'InstanceList': [0x00000050, [0x40000000, 0x0, 0x0, 0x0]],
-						'Model': [0x00000051, [0x0, 0x0, 0x0, 0x0]],
-						'ColourCube': [0x00000052, [0x40000000, 0x0, 0x0, 0x0]],
-						'Shader': [0x00000053, [0x0, 0x0, 0x0, 0x0]],
-						'PolygonSoupList': [0x00000060, [0x40000000, 0x0, 0x0, 0x0]],
-						'TextFile': [0x00000070, [0x40000000, 0x0, 0x0, 0x0]],
-						'Ginsu': [0x00000080, [0x20000000, 0x0, 0x0, 0x0]],
-						'Wave': [0x00000081, [0x70000000, 0x0, 0x0, 0x0]],
-						'ZoneList': [0x00000090, [0x40000000, 0x0, 0x0, 0x0]],
-						'WorldPaintMap': [0x00000091, [0x70000000, 0x0, 0x0, 0x0]],
-						'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
-						'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
-						'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
-						'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],	#PS3
-						'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
-						'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
-						'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
-						'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
-						'Language': [0x00000201, [0x40000000, 0x0, 0x0, 0x0]],
-						'TriggerData': [0x00000202, [0x40000000, 0x0, 0x0, 0x0]],
-						'RoadData': [0x00000203, [0x40000000, 0x0, 0x0, 0x0]],
-						'DynamicInstanceList': [0x00000204, [0x40000000, 0x0, 0x0, 0x0]],
-						'WorldObject': [0x00000205, [0x40000000, 0x0, 0x0, 0x0]],
-						'ZoneHeader': [0x00000206, [0x40000000, 0x0, 0x0, 0x0]],
-						'VehicleSound': [0x00000207, [0x40000000, 0x0, 0x0, 0x0]],
-						'RoadMapData': [0x00000208, [0x40000000, 0x0, 0x0, 0x0]],
-						'CharacterSpec': [0x00000209, [0x40000000, 0x0, 0x0, 0x0]],
-						'CharacterList': [0x0000020a, [0x40000000, 0x0, 0x0, 0x0]],
-						'ReverbRoadData': [0x0000020c, [0x30000000, 0x0, 0x0, 0x0]],
-						'CameraTake': [0x0000020d, [0x40000000, 0x0, 0x0, 0x0]],
-						'CameraTakeList': [0x0000020e, [0x40000000, 0x0, 0x0, 0x0]],
-						'GroundcoverCollection': [0x0000020f, [0x70000000, 0x0, 0x0, 0x0]],
-						'ControlMesh': [0x00000210, [0x40000000, 0x0, 0x0, 0x0]],
-						'Cutscene': [0x00000211, [0x40000000, 0x0, 0x0, 0x0]],
-						'CutsceneList': [0x00000212, [0x40000000, 0x0, 0x0, 0x0]],
-						'LightInstanceList': [0x00000213, [0x40000000, 0x0, 0x0, 0x0]],
-						'GroundcoverInstances': [0x00000214, [0x70000000, 0x0, 0x0, 0x0]],
-						'BearEffect': [0x00000301, [0x40000000, 0x0, 0x0, 0x0]],
-						'BearGlobalParameters': [0x00000302, [0x40000000, 0x0, 0x0, 0x0]],
-						'ConvexHull': [0x00000303, [0x40000000, 0x0, 0x0, 0x0]],
-						'HSMData': [0x00000501, [0x40000000, 0x0, 0x0, 0x0]],
-						'TrafficData': [0x00000701, [0x40000000, 0x0, 0x0, 0x0]]}
+def get_resourcetypeid_nibble_hp(resource_type, muPlatform=1):
+	if muPlatform == 0x1: # PC # OK
+		resource_nibble = {	'Texture': [0x00000001, [0x20000000, 0x40000000, 0x0, 0x0]],
+							'Material': [0x00000002, [0x0, 0x0, 0x0, 0x0]],
+							'VertexDescriptor': [0x00000003, [0x20000000, 0x0, 0x0, 0x0]],
+							'VertexProgramState': [0x00000004, [0x20000000, 0x0, 0x0, 0x0]],
+							'Renderable': [0x00000005, [0x40000000, 0x40000000, 0x0, 0x0]],
+							'MaterialState': [0x00000006, [0x0, 0x0, 0x0, 0x0]],
+							'SamplerState': [0x00000007, [0x20000000, 0x0, 0x0, 0x0]],
+							'ShaderProgramBuffer': [0x00000008, [0x40000000, 0x20000000, 0x0, 0x0]],
+							'GenesysDefinition': [0x00000012, [0x40000000, 0x0, 0x0, 0x0]],
+							'GenesysInstance': [0x00000013, [0x40000000, 0x0, 0x0, 0x0]],
+							'Font': [0x00000030, [0x40000000, 0x0, 0x0, 0x0]],
+							'InstanceList': [0x00000050, [0x40000000, 0x0, 0x0, 0x0]],
+							'Model': [0x00000051, [0x0, 0x0, 0x0, 0x0]],
+							'ColourCube': [0x00000052, [0x40000000, 0x0, 0x0, 0x0]],
+							'Shader': [0x00000053, [0x0, 0x0, 0x0, 0x0]],
+							'PolygonSoupList': [0x00000060, [0x40000000, 0x0, 0x0, 0x0]],
+							'TextFile': [0x00000070, [0x40000000, 0x0, 0x0, 0x0]],
+							'Ginsu': [0x00000080, [0x20000000, 0x0, 0x0, 0x0]],
+							'Wave': [0x00000081, [0x70000000, 0x0, 0x0, 0x0]],
+							'ZoneList': [0x00000090, [0x40000000, 0x0, 0x0, 0x0]],
+							'WorldPaintMap': [0x00000091, [0x70000000, 0x0, 0x0, 0x0]],
+							'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
+							'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
+							'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
+							'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+							'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
+							'DeltaDeleted': [0x000000de, [0x0, 0x0, 0x0, 0x0]],	#X360 beta
+							'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
+							'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
+							'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
+							'Language': [0x00000201, [0x40000000, 0x0, 0x0, 0x0]],
+							'TriggerData': [0x00000202, [0x40000000, 0x0, 0x0, 0x0]],
+							'RoadData': [0x00000203, [0x40000000, 0x0, 0x0, 0x0]],
+							'DynamicInstanceList': [0x00000204, [0x40000000, 0x0, 0x0, 0x0]],
+							'WorldObject': [0x00000205, [0x40000000, 0x0, 0x0, 0x0]],
+							'ZoneHeader': [0x00000206, [0x40000000, 0x0, 0x0, 0x0]],
+							'VehicleSound': [0x00000207, [0x40000000, 0x0, 0x0, 0x0]],
+							'RoadMapData': [0x00000208, [0x40000000, 0x0, 0x0, 0x0]],
+							'CharacterSpec': [0x00000209, [0x40000000, 0x0, 0x0, 0x0]],
+							'CharacterList': [0x0000020a, [0x40000000, 0x0, 0x0, 0x0]],
+							'ReverbRoadData': [0x0000020c, [0x30000000, 0x0, 0x0, 0x0]],
+							'CameraTake': [0x0000020d, [0x40000000, 0x0, 0x0, 0x0]],
+							'CameraTakeList': [0x0000020e, [0x40000000, 0x0, 0x0, 0x0]],
+							'GroundcoverCollection': [0x0000020f, [0x70000000, 0x0, 0x0, 0x0]],
+							'ControlMesh': [0x00000210, [0x40000000, 0x0, 0x0, 0x0]],
+							'Cutscene': [0x00000211, [0x40000000, 0x0, 0x0, 0x0]],
+							'CutsceneList': [0x00000212, [0x40000000, 0x0, 0x0, 0x0]],
+							'LightInstanceList': [0x00000213, [0x40000000, 0x0, 0x0, 0x0]],
+							'GroundcoverInstances': [0x00000214, [0x70000000, 0x0, 0x0, 0x0]],
+							'BearEffect': [0x00000301, [0x40000000, 0x0, 0x0, 0x0]],
+							'BearGlobalParameters': [0x00000302, [0x40000000, 0x0, 0x0, 0x0]],
+							'ConvexHull': [0x00000303, [0x40000000, 0x0, 0x0, 0x0]],
+							'HSMData': [0x00000501, [0x40000000, 0x0, 0x0, 0x0]],
+							'TrafficData': [0x00000701, [0x40000000, 0x0, 0x0, 0x0]]}
+	
+	elif muPlatform == 0x2:	# X360
+		resource_nibble = {	'Texture': [0x00000001, [0x20000000, 0xC0000000, 0x0, 0x0]],
+							'Material': [0x00000002, [0x0, 0x0, 0x0, 0x0]],
+							'VertexDescriptor': [0x00000003, [0x20000000, 0x0, 0x0, 0x0]],
+							'VertexProgramState': [0x00000004, [0x40000000, 0x0, 0x0, 0x0]], # OK, changed the size[0]
+							'Renderable': [0x00000005, [0x40000000, 0x20000000, 0x0, 0x0]],
+							'MaterialState': [0x00000006, [0x0, 0x0, 0x0, 0x0]],
+							'SamplerState': [0x00000007, [0x20000000, 0x0, 0x0, 0x0]],
+							'ShaderProgramBuffer': [0x00000008, [0x40000000, 0x50000000, 0x0, 0x0]],
+							'GenesysDefinition': [0x00000012, [0x40000000, 0x0, 0x0, 0x0]],
+							'GenesysInstance': [0x00000013, [0x40000000, 0x0, 0x0, 0x0]],
+							'Font': [0x00000030, [0x40000000, 0x0, 0x0, 0x0]],
+							'InstanceList': [0x00000050, [0x40000000, 0x0, 0x0, 0x0]],
+							'Model': [0x00000051, [0x0, 0x0, 0x0, 0x0]],
+							'ColourCube': [0x00000052, [0x40000000, 0x0, 0x0, 0x0]],
+							'Shader': [0x00000053, [0x0, 0x0, 0x0, 0x0]],
+							'PolygonSoupList': [0x00000060, [0x40000000, 0x0, 0x0, 0x0]],
+							'TextFile': [0x00000070, [0x40000000, 0x0, 0x0, 0x0]],
+							'Ginsu': [0x00000080, [0x20000000, 0x0, 0x0, 0x0]],
+							'Wave': [0x00000081, [0x70000000, 0x0, 0x0, 0x0]],
+							'ZoneList': [0x00000090, [0x40000000, 0x0, 0x0, 0x0]],
+							'WorldPaintMap': [0x00000091, [0x70000000, 0x0, 0x0, 0x0]],
+							'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
+							'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
+							'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
+							'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],	#PS3
+							'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
+							'DeltaDeleted': [0x000000de, [0x0, 0x0, 0x0, 0x0]],	#X360 beta
+							'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
+							'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
+							'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
+							'Language': [0x00000201, [0x40000000, 0x0, 0x0, 0x0]],
+							'TriggerData': [0x00000202, [0x40000000, 0x0, 0x0, 0x0]],
+							'RoadData': [0x00000203, [0x40000000, 0x0, 0x0, 0x0]],
+							'DynamicInstanceList': [0x00000204, [0x40000000, 0x0, 0x0, 0x0]],
+							'WorldObject': [0x00000205, [0x40000000, 0x0, 0x0, 0x0]],
+							'ZoneHeader': [0x00000206, [0x40000000, 0x0, 0x0, 0x0]],
+							'VehicleSound': [0x00000207, [0x40000000, 0x0, 0x0, 0x0]],
+							'RoadMapData': [0x00000208, [0x40000000, 0x0, 0x0, 0x0]],
+							'CharacterSpec': [0x00000209, [0x40000000, 0x0, 0x0, 0x0]],
+							'CharacterList': [0x0000020a, [0x40000000, 0x0, 0x0, 0x0]],
+							'ReverbRoadData': [0x0000020c, [0x30000000, 0x0, 0x0, 0x0]],
+							'CameraTake': [0x0000020d, [0x40000000, 0x0, 0x0, 0x0]],
+							'CameraTakeList': [0x0000020e, [0x40000000, 0x0, 0x0, 0x0]],
+							'GroundcoverCollection': [0x0000020f, [0x70000000, 0x0, 0x0, 0x0]],
+							'ControlMesh': [0x00000210, [0x40000000, 0x0, 0x0, 0x0]],
+							'Cutscene': [0x00000211, [0x40000000, 0x0, 0x0, 0x0]],
+							'CutsceneList': [0x00000212, [0x40000000, 0x0, 0x0, 0x0]],
+							'LightInstanceList': [0x00000213, [0x40000000, 0x0, 0x0, 0x0]],
+							'GroundcoverInstances': [0x00000214, [0x70000000, 0x0, 0x0, 0x0]],
+							'BearEffect': [0x00000301, [0x40000000, 0x0, 0x0, 0x0]],
+							'BearGlobalParameters': [0x00000302, [0x40000000, 0x0, 0x0, 0x0]],
+							'ConvexHull': [0x00000303, [0x40000000, 0x0, 0x0, 0x0]],
+							'HSMData': [0x00000501, [0x40000000, 0x0, 0x0, 0x0]],
+							'TrafficData': [0x00000701, [0x40000000, 0x0, 0x0, 0x0]]}
+	
+	elif muPlatform == 0x3:	# PS3
+		resource_nibble = {	'Texture': [0x00000001, [0x40000000, 0x0, 0x70000000, 0x0]], # OK, changed the size[0]
+							'Material': [0x00000002, [0x0, 0x0, 0x0, 0x0]],
+							'VertexDescriptor': [0x00000003, [0x20000000, 0x0, 0x0, 0x0]],
+							'VertexProgramState': [0x00000004, [0x20000000, 0x0, 0x0, 0x0]],
+							'Renderable': [0x00000005, [0x40000000, 0x0, 0x40000000, 0x0]],
+							'MaterialState': [0x00000006, [0x0, 0x0, 0x0, 0x0]],
+							'SamplerState': [0x00000007, [0x40000000, 0x0, 0x0, 0x0]], # OK, changed the size[0]
+							'ShaderProgramBuffer': [0x00000008, [0x70000000, 0x70000000, 0x0, 0x0]], # OK, changed the size[0] and [1]
+							'GenesysDefinition': [0x00000012, [0x40000000, 0x0, 0x0, 0x0]],
+							'GenesysInstance': [0x00000013, [0x40000000, 0x0, 0x0, 0x0]],
+							'Font': [0x00000030, [0x40000000, 0x0, 0x0, 0x0]],
+							'InstanceList': [0x00000050, [0x40000000, 0x0, 0x0, 0x0]],
+							'Model': [0x00000051, [0x0, 0x0, 0x0, 0x0]],
+							'ColourCube': [0x00000052, [0x40000000, 0x0, 0x0, 0x0]],
+							'Shader': [0x00000053, [0x0, 0x0, 0x0, 0x0]],
+							'PolygonSoupList': [0x00000060, [0x40000000, 0x0, 0x0, 0x0]],
+							'TextFile': [0x00000070, [0x40000000, 0x0, 0x0, 0x0]],
+							'Ginsu': [0x00000080, [0x20000000, 0x0, 0x0, 0x0]],
+							'Wave': [0x00000081, [0x70000000, 0x0, 0x0, 0x0]],
+							'ZoneList': [0x00000090, [0x40000000, 0x0, 0x0, 0x0]],
+							'WorldPaintMap': [0x00000091, [0x70000000, 0x0, 0x0, 0x0]],
+							'AnimationList': [0x000000b0, [0x40000000, 0x0, 0x0, 0x0]],
+							'PathAnimation': [0x000000b1, [0x40000000, 0x0, 0x0, 0x0]],
+							'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
+							'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],
+							'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],
+							'DeltaDeleted': [0x000000de, [0x0, 0x0, 0x0, 0x0]],	#X360 beta
+							'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
+							'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
+							'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
+							'Language': [0x00000201, [0x40000000, 0x0, 0x0, 0x0]],
+							'TriggerData': [0x00000202, [0x40000000, 0x0, 0x0, 0x0]],
+							'RoadData': [0x00000203, [0x40000000, 0x0, 0x0, 0x0]],
+							'DynamicInstanceList': [0x00000204, [0x40000000, 0x0, 0x0, 0x0]],
+							'WorldObject': [0x00000205, [0x40000000, 0x0, 0x0, 0x0]],
+							'ZoneHeader': [0x00000206, [0x40000000, 0x0, 0x0, 0x0]],
+							'VehicleSound': [0x00000207, [0x40000000, 0x0, 0x0, 0x0]],
+							'RoadMapData': [0x00000208, [0x40000000, 0x0, 0x0, 0x0]],
+							'CharacterSpec': [0x00000209, [0x40000000, 0x0, 0x0, 0x0]],
+							'CharacterList': [0x0000020a, [0x40000000, 0x0, 0x0, 0x0]],
+							'ReverbRoadData': [0x0000020c, [0x30000000, 0x0, 0x0, 0x0]],
+							'CameraTake': [0x0000020d, [0x40000000, 0x0, 0x0, 0x0]],
+							'CameraTakeList': [0x0000020e, [0x40000000, 0x0, 0x0, 0x0]],
+							'GroundcoverCollection': [0x0000020f, [0x70000000, 0x0, 0x0, 0x0]],
+							'ControlMesh': [0x00000210, [0x40000000, 0x0, 0x0, 0x0]],
+							'Cutscene': [0x00000211, [0x40000000, 0x0, 0x0, 0x0]],
+							'CutsceneList': [0x00000212, [0x40000000, 0x0, 0x0, 0x0]],
+							'LightInstanceList': [0x00000213, [0x40000000, 0x0, 0x0, 0x0]],
+							'GroundcoverInstances': [0x00000214, [0x70000000, 0x0, 0x0, 0x0]],
+							'BearEffect': [0x00000301, [0x40000000, 0x0, 0x0, 0x0]],
+							'BearGlobalParameters': [0x00000302, [0x40000000, 0x0, 0x0, 0x0]],
+							'ConvexHull': [0x00000303, [0x40000000, 0x0, 0x0, 0x0]],
+							'HSMData': [0x00000501, [0x40000000, 0x0, 0x0, 0x0]],
+							'TrafficData': [0x00000701, [0x40000000, 0x0, 0x0, 0x0]]}
 	
 	return resource_nibble[resource_type]
 
@@ -3528,6 +4447,7 @@ def get_resourcetypeid_nibble_hpr(resource_type):
 						'Skeleton': [0x000000b2, [0x40000000, 0x0, 0x0, 0x0]],
 						'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],	#PS3
 						'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x20000000]],	#PS3
+						'DeltaDeleted': [0x000000de, [0x0, 0x0, 0x0, 0x0]],	#X360 beta
 						'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
 						'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
 						'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
@@ -3595,6 +4515,7 @@ def get_resourcetypeid_nibble_mw(resource_type):
 						'Animation': [0x000000b3, [0x40000000, 0x0, 0x0, 0x0]],
 						'CgsVertexProgramState': [0x000000c0, [0x40000000, 0x0, 0x0, 0x0]],
 						'CgsProgramBuffer': [0x000000c1, [0x40000000, 0x0, 0x0, 0x40000000]],
+						'DeltaDeleted': [0x000000de, [0x0, 0x0, 0x0, 0x0]],
 						'VehicleList': [0x00000105, [0x40000000, 0x0, 0x0, 0x0]],
 						'GraphicsSpec': [0x00000106, [0x40000000, 0x0, 0x0, 0x0]],
 						'AIData': [0x00000200, [0x40000000, 0x0, 0x0, 0x0]],
@@ -3630,7 +4551,7 @@ def get_resourcetypeid_nibble_mw(resource_type):
 	return resource_nibble[resource_type]
 
 
-def convert_resource_table(root, macStreamName):
+def convert_resource_table(root, macStreamName, is_streamed=True):
     """Convert the <ResourceStringTable> XML into the desired JSON format."""
     if root.tag != "ResourceStringTable":
         raise ValueError("Unexpected XML root tag. Expected <ResourceStringTable>")
@@ -3643,15 +4564,19 @@ def convert_resource_table(root, macStreamName):
         resource_name = resource.get("name")
         stream_index = resource.get("streamIndex")
 
-        if not resource_id or not resource_type or not resource_name or stream_index is None:
-            continue  # Skip invalid entries
+        if is_streamed == False:
+            if not resource_id or not resource_type or not resource_name:
+                continue  # Skip invalid entries
+        elif is_streamed == True:
+            if not resource_id or not resource_type or not resource_name or stream_index is None:
+                continue  # Skip invalid entries
 
-        # Handle stream index conversion
-        try:
-            stream_index_int = int(stream_index)  # Try converting to an integer
-            stream_key = macStreamName[stream_index_int]  # Use the name from macStreamName
-        except (ValueError, IndexError):
-            stream_key = stream_index  # If it's not an integer, keep it as-is (e.g., "importEntry")
+            # Handle stream index conversion
+            try:
+                stream_index_int = int(stream_index)  # Try converting to an integer
+                stream_key = macStreamName[stream_index_int]  # Use the name from macStreamName
+            except (ValueError, IndexError):
+                stream_key = stream_index  # If it's not an integer, keep it as-is (e.g., "importEntry")
 
         # Extract IdType and format ID
         if len(resource_id) == 8:
@@ -3670,14 +4595,25 @@ def convert_resource_table(root, macStreamName):
             formatted_id = f"ID=0x{resource_id}"
 
         # Organize data into JSON format
-        if stream_key not in resource_table:
-            resource_table[stream_key] = {}
+        if is_streamed == True:
+            if stream_key not in resource_table:
+                resource_table[stream_key] = {}
 
-        resource_table[stream_key][formatted_id] = {
-            "ResourceType": resource_type,
-            "IdType": id_type,
-            "Name": resource_name
-        }
+            resource_table[stream_key][formatted_id] = {
+                "ResourceType": resource_type,
+                "IdType": id_type,
+                "Name": resource_name
+            }
+        elif is_streamed == False:
+            if "" not in resource_table:
+                resource_table[""] = {}
+
+            resource_table[""][formatted_id] = {
+                "ResourceType": resource_type,
+                "IdType": id_type,
+                "Name": resource_name
+            }
+
 
     return {"ResourceStringTable": resource_table}
 
@@ -3715,7 +4651,249 @@ def reconstruct_id(formatted_id, IdType):
     return (IdType + index_byte + type_bytes + bytes.fromhex(resource_id)).hex().lower()
 
 
-def json_to_xml(json_data, macStreamName):
+def read_resources_table_mw(resource_entries_path):
+	all_resources = []
+	stream_names = []
+	
+	if ".json" in os.path.basename(resource_entries_path):
+		with open(resource_entries_path, 'r') as f:
+			json_data = json.load(f)
+		
+			# Retrieving data
+			bundle_name, = json_data
+			try:
+				game = json_data[bundle_name]["Game"]
+			except:
+				game = "MW"
+			
+			try:
+				platform = json_data[bundle_name]["Platform"]
+			except:
+				platform = "PC"
+			
+			try:
+				flags = json_data[bundle_name]["Flags"]
+			except:
+				flags = ["E_FLAGS_ZLIB_COMPRESSION", "E_FLAGS_MULTISTREAM_BUNDLE"]
+			
+			try:
+				mDefaultResourceId = json_data[bundle_name]["DefaultResourceId"]
+			except:
+				mDefaultResourceId = "0x00000000"
+			
+			try:
+				miDefaultResourceStreamIndex = json_data[bundle_name]["DefaultResourceStreamIndex"]
+			except:
+				miDefaultResourceStreamIndex = -1
+			
+			try:
+				ResourceEntries = json_data[bundle_name]["ResourceEntries"]
+			except:
+				ResourceEntries = {}
+			
+			try:
+				debug_data = json_data[bundle_name]["ResourceStringTable"]
+			except:
+				debug_data = {}
+			
+			# Setting data
+			data_type = ["H", 0x2]
+			numDataOffsets = 4
+			macMagicNumber = 'bnd2'
+			muVersion = 0x5
+			muPlatform = set_platform(platform, "mw")
+			muDebugDataOffset = 0xFFFFFFFF
+			muResourceEntriesCount = -1
+			muResourceEntriesOffset = 0x70
+			mauResourceDataOffset = [-1, -1, -1, -1]
+			muFlags = construct_bundle_flags(flags)
+			mDefaultResourceId = int(mDefaultResourceId, 16)
+			macStreamName = list(ResourceEntries.keys())
+			custom_data = b''
+			
+			if muPlatform == 0x1:
+				endian = "<"
+			elif muPlatform == 0x2:
+				endian = ">"
+			elif muPlatform == 0x3:
+				endian = ">"
+			elif muPlatform == 0x4:
+				endian = "<"
+			elif muPlatform == 0x5:
+				endian = ">"
+			else:
+				print("Error: bundle platform not supported yet. Select a PC, PS3, X360, PS Vita or Wii U file version.")
+				return 1
+			
+			#if len(macStreamName) > 4:
+			#	print("Error: only four StreamNames are allowed. Input file contains %d, which are " % (len(macStreamName), macStreamName))
+			#	return 1
+			
+			try:
+				stream_names = [stream_name for stream_name in macStreamName if stream_name != '']
+			except:
+				split_by_stream = False
+			
+			if len(stream_names) == 0:
+				split_by_stream = False
+			
+			if "E_FLAGS_CONTAINS_DEBUG_DATA" in flags and len(debug_data) > 0:
+				debug_data = json_to_xml(debug_data, macStreamName)
+			
+			# Regular expression pattern (both "type=" and "index=" are optional, case-insensitive)
+			#pattern = r"ID=(\d+)(?:, TYPE=(\d+))?(?:, INDEX=(\d+))?" # int
+			pattern = r"ID=(0x[0-9A-Fa-f]+)(?:, type=(\d+))?(?:, index=(\d+))?" #hex
+			
+			mResources = []
+			for muStreamIndex, mcStreamName in enumerate(macStreamName):
+				stream_entries = ResourceEntries[mcStreamName]
+				for entry, data in stream_entries.items():
+					match = re.match(pattern, entry, re.IGNORECASE)  # Add re.IGNORECASE to make it case-insensitive
+					
+					if match:
+						ResourceId = int(match.group(1), 16) # Convert hex string to int
+						ResourceTypeId = int(match.group(2)) if match.group(2) else 0  # Default to 0 if missing
+						index = int(match.group(3)) if match.group(3) else 0  # Default to 0 if missing
+					else:
+						print("Error: incorrect entry %s." % entry)
+						return 1
+					
+					try:
+						muResourceType = data["ResourceType"]
+					except:
+						print("Error: missing resource type on entry %s." % to_hex(ResourceId))
+						return 1
+					
+					try:
+						IdType = data["IdType"]
+					except:
+						print("Warning: missing IdType on entry %s. Setting as 'E_ID_TYPE_NORMAL'" % to_hex(ResourceId))
+						IdType = "E_ID_TYPE_NORMAL"
+					
+					mResourceId = int_to_id(ResourceId, endian)
+					IdType = set_idtype(IdType)
+					
+					try:
+						stream_name = stream_names[muStreamIndex]
+					except:
+						stream_name = muStreamIndex
+					
+					file_name = mResourceId
+					if ResourceTypeId != 0:
+						file_name += "_" + str(ResourceTypeId) 
+						if index != 0:
+							file_name += "_" + str(index)
+					elif ResourceTypeId == 0 and index != 0:
+						file_name += "_" + str(ResourceTypeId)
+						file_name += "_" + str(index)
+					
+					all_resources.append([mResourceId, muResourceType, id_to_int(mResourceId), [ResourceTypeId, index, IdType], stream_name, file_name])
+	
+	else:
+		len_resource_entries_data = os.path.getsize(resource_entries_path)
+		
+		with open(resource_entries_path, "rb") as f:
+			try:
+				macMagicNumber = str(f.read(0x4), 'ascii')
+			except:
+				print("Error: not a valid bundle. Magic number (bnd2) is incorrect.")
+				return 1
+			if macMagicNumber != 'bnd2':
+				print("Error: not a valid bundle. Magic number (bnd2) is incorrect.")
+				return 1
+			
+			data_type = ["H", 0x2]
+			numDataOffsets = 4
+			
+			f.seek(0x4 + data_type[1], 0)
+			muPlatform = f.read(data_type[1])
+			muPlatform_little_endian = struct.unpack("<%s" % data_type[0], muPlatform)[0]
+			muPlatform_big_endian = struct.unpack(">%s" % data_type[0], muPlatform)[0]
+			f.seek(0x4, 0)
+			
+			if muPlatform_little_endian == 0x1:
+				endian = "<"
+			elif muPlatform_big_endian == 0x2:
+				endian = ">"
+			elif muPlatform_big_endian == 0x3:
+				endian = ">"
+			elif muPlatform_little_endian == 0x4:
+				endian = "<"
+			elif muPlatform_big_endian == 0x5:
+				endian = ">"
+			else:
+				print("Error: bundle platform not supported yet. Select a PC, PS3, X360, PS Vita or Wii U file version.")
+				return 1
+			
+			muVersion = struct.unpack("%s%s" % (endian, data_type[0]), f.read(data_type[1]))[0]
+			muPlatform = struct.unpack("%s%s" % (endian, data_type[0]), f.read(data_type[1]))[0]
+			muDebugDataOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			muResourceEntriesCount = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			muResourceEntriesOffset = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			mauResourceDataOffset = struct.unpack("%s%dI" % (endian, numDataOffsets), f.read(numDataOffsets*0x4))
+			muFlags = struct.unpack("%sI" % endian, f.read(0x4))[0]
+			mDefaultResourceId = struct.unpack("%sQ" % endian, f.read(0x8))[0]
+			miDefaultResourceStreamIndex = struct.unpack("%si" % endian, f.read(0x4))[0]
+			macStreamName = [struct.unpack(endian + '15s', f.read(0xF))[0].decode('utf-8').rstrip(chr(0)) for _ in range(4)]
+			
+			muResourceEntriesCount_verification = (len_resource_entries_data - muResourceEntriesOffset)//0x48
+			if muResourceEntriesCount != muResourceEntriesCount_verification:
+				print("Warning: muResourceEntriesCount does not match the number of resource entries. It will be used %d" % muResourceEntriesCount_verification)
+				muResourceEntriesCount = muResourceEntriesCount_verification
+			
+			custom_data = f.read(muResourceEntriesOffset - f.tell())
+			
+			try:
+				#stream_names = custom_data[4:].split(b'\x00')
+				#stream_names = [str(stream_name, 'ascii') for stream_name in stream_names if stream_name != b'']
+				stream_names = [stream_name for stream_name in macStreamName if stream_name != '']
+			except:
+				split_by_stream = False
+			
+			if len(stream_names) == 0:
+				split_by_stream = False
+			
+			mResources = []
+			for i in range(0, muResourceEntriesCount):
+				f.seek(muResourceEntriesOffset + i*0x48, 0)
+				if endian == "<":
+					mResourceId = bytes_to_id(f.read(0x4))
+					ResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+					index = struct.unpack("B", f.read(0x1))[0]
+					IdType = struct.unpack("B", f.read(0x1))[0]
+				else:
+					IdType = struct.unpack("B", f.read(0x1))[0]
+					index = struct.unpack("B", f.read(0x1))[0]
+					ResourceTypeId = struct.unpack(endian + "H", f.read(0x2))[0]
+					mResourceId = bytes_to_id(f.read(0x4))
+				f.seek(0x34, 1)
+				muResourceTypeId = struct.unpack("%sI" % endian, f.read(0x4))[0]
+				f.seek(0x2, 1)
+				unused_muFlags = struct.unpack("%sB" % endian, f.read(0x1))[0]
+				muStreamIndex = struct.unpack("%sB" % endian, f.read(0x1))[0]
+				
+				muResourceType, nibbles = get_resourcetype_nibble_mw(muResourceTypeId)
+				
+				try:
+					stream_name = stream_names[muStreamIndex]
+				except:
+					stream_name = muStreamIndex
+				
+				file_name = mResourceId
+				if ResourceTypeId != 0:
+					file_name += "_" + str(ResourceTypeId) 
+					if index != 0:
+						file_name += "_" + str(index)
+				elif ResourceTypeId == 0 and index != 0:
+					file_name += "_" + str(ResourceTypeId)
+					file_name += "_" + str(index)
+				
+				all_resources.append([mResourceId, muResourceType, id_to_int(mResourceId), [ResourceTypeId, index, IdType], stream_name, file_name])
+	
+	return all_resources
+
+
+def json_to_xml(json_data, macStreamName, is_streamed=True):
     """Convert JSON back to XML <ResourceStringTable> with correct formatting."""
     resource_string_table = ET.Element("ResourceStringTable")
 
@@ -3738,7 +4916,8 @@ def json_to_xml(json_data, macStreamName):
             resource_elem.set("id", res_id)
             resource_elem.set("type", details["ResourceType"])
             resource_elem.set("name", details["Name"])
-            resource_elem.set("streamIndex", str(stream_index))
+            if is_streamed == True:
+                resource_elem.set("streamIndex", str(stream_index))
 
     # Format XML string with correct line endings
     xml_string = ET.tostring(resource_string_table, encoding="utf-8").decode("utf-8")
